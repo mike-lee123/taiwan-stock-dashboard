@@ -7,41 +7,10 @@ import pandas as pd
 import numpy as np
 
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
-from data_loader import normalize_symbol, fetch_stock_history, fetch_stock_fundamentals
+from data_loader import normalize_symbol, fetch_stock_history, fetch_stock_fundamentals, POPULAR_TW_STOCKS, TAIWAN_STOCK_UNIVERSE_260
 from indicators import compute_all_indicators
 
-EXPANDED_UNIVERSE = [
-    {"code": "2330", "name": "台積電", "sector": "晶圓代工"},
-    {"code": "2317", "name": "鴻海", "sector": "AI伺服器/組裝"},
-    {"code": "2454", "name": "聯發科", "sector": "IC設計"},
-    {"code": "2382", "name": "廣達", "sector": "AI伺服器"},
-    {"code": "2308", "name": "台達電", "sector": "電源/散熱"},
-    {"code": "3231", "name": "緯創", "sector": "AI伺服器"},
-    {"code": "2603", "name": "長榮", "sector": "貨櫃航運"},
-    {"code": "2609", "name": "陽明", "sector": "貨櫃航運"},
-    {"code": "2881", "name": "富邦金", "sector": "金控"},
-    {"code": "2882", "name": "國泰金", "sector": "金控"},
-    {"code": "2891", "name": "中信金", "sector": "金控"},
-    {"code": "2412", "name": "中華電", "sector": "電信"},
-    {"code": "3008", "name": "大立光", "sector": "光學鏡頭"},
-    {"code": "3443", "name": "創意", "sector": "ASIC/IP"},
-    {"code": "3661", "name": "世芯-KY", "sector": "ASIC/IP"},
-    {"code": "2376", "name": "技嘉", "sector": "AI伺服器/主機板"},
-    {"code": "6669", "name": "緯穎", "sector": "雲端伺服器"},
-    {"code": "3034", "name": "聯詠", "sector": "驅動IC"},
-    {"code": "2357", "name": "華碩", "sector": "PC/伺服器"},
-    {"code": "3711", "name": "日月光投控", "sector": "封測/CoWoS"},
-    {"code": "2002", "name": "中鋼", "sector": "鋼鐵"},
-    {"code": "1301", "name": "台塑", "sector": "塑化"},
-    {"code": "1303", "name": "南亞", "sector": "塑化"},
-    {"code": "0050", "name": "元大台灣50", "sector": "市值型ETF"},
-    {"code": "0056", "name": "元大高股息", "sector": "高股息ETF"},
-    {"code": "00878", "name": "國泰永續高股息", "sector": "高股息ETF"},
-    {"code": "00919", "name": "群益精選高息", "sector": "高股息ETF"},
-    {"code": "00929", "name": "復華科技優息", "sector": "科技高息ETF"},
-    {"code": "8069", "name": "元太", "sector": "電子紙/上櫃"},
-    {"code": "3293", "name": "鈊象", "sector": "遊戲軟體/上櫃"}
-]
+EXPANDED_UNIVERSE = POPULAR_TW_STOCKS
 
 def screen_stocks(strategy: str = "all_signals") -> pd.DataFrame:
     results = []
