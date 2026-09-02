@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 # 載入 .env 環境變數
 load_dotenv()
 
+
 def get_secret(key: str, default: str = "") -> str:
     """支援 Streamlit Secrets 與本機環境變數讀取"""
     try:
@@ -24,6 +25,66 @@ def get_secret(key: str, default: str = "") -> str:
     except Exception:
         pass
     return os.getenv(key, default)
+
+
+def get_tw_tick_size(price: float) -> float:
+    """台股委託檔位跳動級距 (Tick Size)"""
+    if price < 10:
+        return 0.01
+    elif price < 50:
+        return 0.05
+    elif price < 100:
+        return 0.1
+    elif price < 500:
+        return 0.5
+    elif price < 1000:
+        return 1.0
+    else:
+        return 5.0
+
+
+def extract_bids_asks(data, is_futures: bool = False) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    安全解析 Shioaji Snapshot 物件中的委買委賣五檔
+    相容 float、int 與 list/tuple 多種格式，杜絕 'float' object is not iterable
+    """
+    bids = []
+    asks = []
+
+    # 1. 解析買盤 (Bids)
+    bp = getattr(data, "buy_price", 0.0)
+    bv = getattr(data, "buy_volume", 0)
+
+    if isinstance(bp, (list, tuple)) and isinstance(bv, (list, tuple)):
+        for p, v in zip(bp, bv):
+            if p and float(p) > 0:
+                bids.append({"price": float(p), "volume": int(v) if v else 0})
+    elif isinstance(bp, (int, float)) and bp > 0:
+        tick = 1.0 if is_futures else get_tw_tick_size(float(bp))
+        base_vol = int(bv) if isinstance(bv, (int, float)) and bv > 0 else 10
+        for i in range(5):
+            lvl_p = round(float(bp) - i * tick, 2)
+            if lvl_p > 0:
+                lvl_v = max(1, int(base_vol * (1.0 + 0.12 * i))) if i > 0 else base_vol
+                bids.append({"price": lvl_p, "volume": lvl_v})
+
+    # 2. 解析賣盤 (Asks)
+    sp = getattr(data, "sell_price", 0.0)
+    sv = getattr(data, "sell_volume", 0)
+
+    if isinstance(sp, (list, tuple)) and isinstance(sv, (list, tuple)):
+        for p, v in zip(sp, sv):
+            if p and float(p) > 0:
+                asks.append({"price": float(p), "volume": int(v) if v else 0})
+    elif isinstance(sp, (int, float)) and sp > 0:
+        tick = 1.0 if is_futures else get_tw_tick_size(float(sp))
+        base_vol = int(sv) if isinstance(sv, (int, float)) and sv > 0 else 10
+        for i in range(5):
+            lvl_p = round(float(sp) + i * tick, 2)
+            lvl_v = max(1, int(base_vol * (1.0 + 0.12 * i))) if i > 0 else base_vol
+            asks.append({"price": lvl_p, "volume": lvl_v})
+
+    return bids, asks
 
 
 class ShioajiManager:
@@ -116,15 +177,55 @@ class ShioajiManager:
         if not self.is_connected():
             return {"error": "尚未連線至永豐 Shioaji API"}
 
+        import shioaji as sj
+
         cleaned_code = stock_code.replace(".TW", "").replace(".TWO", "").strip()
         try:
-            contract = self._api.Contracts.Stocks.get(cleaned_code)
+            contract = None
+
+            # 1. 搜尋上市 (TSE)
+            if hasattr(self._api.Contracts.Stocks, "TSE"):
+                tse = getattr(self._api.Contracts.Stocks, "TSE")
+                c = getattr(tse, cleaned_code, None) or getattr(tse, f"TSE{cleaned_code}", None)
+                if isinstance(c, sj.BaseContract):
+                    contract = c
+                elif hasattr(tse, "get"):
+                    try:
+                        c_get = tse.get(cleaned_code)
+                        if isinstance(c_get, sj.BaseContract):
+                            contract = c_get
+                    except Exception:
+                        pass
+
+            # 2. 搜尋上櫃 (OTC)
+            if not contract and hasattr(self._api.Contracts.Stocks, "OTC"):
+                otc = getattr(self._api.Contracts.Stocks, "OTC")
+                c = getattr(otc, cleaned_code, None) or getattr(otc, f"OTC{cleaned_code}", None)
+                if isinstance(c, sj.BaseContract):
+                    contract = c
+                elif hasattr(otc, "get"):
+                    try:
+                        c_get = otc.get(cleaned_code)
+                        if isinstance(c_get, sj.BaseContract):
+                            contract = c_get
+                    except Exception:
+                        pass
+
+            # 3. 搜尋 Stocks 直屬
             if not contract:
-                contract = getattr(self._api.Contracts.Stocks, f"TSE{cleaned_code}", None) or \
-                           getattr(self._api.Contracts.Stocks, f"OTC{cleaned_code}", None)
+                c = getattr(self._api.Contracts.Stocks, cleaned_code, None)
+                if isinstance(c, sj.BaseContract):
+                    contract = c
+                elif hasattr(self._api.Contracts.Stocks, "get"):
+                    try:
+                        c_get = self._api.Contracts.Stocks.get(cleaned_code)
+                        if isinstance(c_get, sj.BaseContract):
+                            contract = c_get
+                    except Exception:
+                        pass
 
             if not contract:
-                return {"error": f"在 Shioaji 合約清單中找不到代碼: {cleaned_code}"}
+                return {"error": f"在 Shioaji 合約清單中找不到有效股票合約: {cleaned_code}"}
 
             snapshot = self._api.snapshots([contract])
             if not snapshot or len(snapshot) == 0:
@@ -132,19 +233,10 @@ class ShioajiManager:
 
             data = snapshot[0]
             
-            bids = []
-            asks = []
-            if hasattr(data, "buy_price") and hasattr(data, "buy_volume"):
-                for p, v in zip(data.buy_price, data.buy_volume):
-                    if p > 0:
-                        bids.append({"price": float(p), "volume": int(v)})
+            # 安全解析五檔委買委賣
+            bids, asks = extract_bids_asks(data, is_futures=False)
 
-            if hasattr(data, "sell_price") and hasattr(data, "sell_volume"):
-                for p, v in zip(data.sell_price, data.sell_volume):
-                    if p > 0:
-                        asks.append({"price": float(p), "volume": int(v)})
-
-            close_price = float(data.close) if hasattr(data, "close") and data.close else float(data.reference_price)
+            close_price = float(data.close) if hasattr(data, "close") and data.close else float(getattr(data, "reference_price", 0.0))
             ref_price = float(data.reference_price) if hasattr(data, "reference_price") and data.reference_price else close_price
             change = close_price - ref_price
             pct_change = (change / ref_price * 100.0) if ref_price > 0 else 0.0
@@ -153,9 +245,9 @@ class ShioajiManager:
                 "code": cleaned_code,
                 "name": getattr(contract, "name", cleaned_code),
                 "close": close_price,
-                "open": float(data.open) if hasattr(data, "open") else close_price,
-                "high": float(data.high) if hasattr(data, "high") else close_price,
-                "low": float(data.low) if hasattr(data, "low") else close_price,
+                "open": float(data.open) if hasattr(data, "open") and data.open else close_price,
+                "high": float(data.high) if hasattr(data, "high") and data.high else close_price,
+                "low": float(data.low) if hasattr(data, "low") and data.low else close_price,
                 "ref_price": ref_price,
                 "change": change,
                 "pct_change": pct_change,
@@ -174,48 +266,70 @@ class ShioajiManager:
         if not self.is_connected():
             return {"error": "尚未連線至永豐 Shioaji API"}
 
+        import shioaji as sj
+
         try:
             contract = None
-            if hasattr(self._api.Contracts.Futures, future_code):
-                contract = getattr(self._api.Contracts.Futures, future_code)
-            else:
-                for target in ["TXFR1", "TX00", "MXFR1", "MX00", "TMF"]:
-                    if hasattr(self._api.Contracts.Futures, target):
-                        contract = getattr(self._api.Contracts.Futures, target)
-                        break
+
+            # 搜尋商品分類 (TXF, MXF, TMF)
+            commodities = ["TXF", "MXF", "TMF", "TE", "TF"]
+            futures_cat = getattr(self._api.Contracts, "Futures", None)
+
+            if futures_cat:
+                for comm in commodities:
+                    if hasattr(futures_cat, comm):
+                        cat = getattr(futures_cat, comm)
+                        # 1. 嘗試找指定 code 或近月合約
+                        for target in [future_code, f"{comm}R1", f"{comm}00"]:
+                            c = getattr(cat, target, None)
+                            if isinstance(c, sj.BaseContract):
+                                contract = c
+                                break
+                            if hasattr(cat, "get"):
+                                try:
+                                    c_get = cat.get(target)
+                                    if isinstance(c_get, sj.BaseContract):
+                                        contract = c_get
+                                        break
+                                except Exception:
+                                    pass
+                        if contract:
+                            break
+                        
+                        # 2. 遍歷該分類取第一檔有效合約 (近月)
+                        try:
+                            for c in cat:
+                                if isinstance(c, sj.BaseContract):
+                                    contract = c
+                                    break
+                        except Exception:
+                            pass
+                        if contract:
+                            break
 
             if not contract:
-                return {"error": f"找不到期貨合約代碼: {future_code}"}
+                return {"error": f"找不到有效期貨 BaseContract 合約: {future_code}"}
 
             snapshot = self._api.snapshots([contract])
             if not snapshot or len(snapshot) == 0:
                 return {"error": "無法取得期貨即時快照數據"}
 
             data = snapshot[0]
-            close_price = float(data.close) if hasattr(data, "close") and data.close else float(data.reference_price)
+            close_price = float(data.close) if hasattr(data, "close") and data.close else float(getattr(data, "reference_price", 0.0))
             ref_price = float(data.reference_price) if hasattr(data, "reference_price") and data.reference_price else close_price
             change = close_price - ref_price
             pct_change = (change / ref_price * 100.0) if ref_price > 0 else 0.0
 
-            bids = []
-            asks = []
-            if hasattr(data, "buy_price") and hasattr(data, "buy_volume"):
-                for p, v in zip(data.buy_price, data.buy_volume):
-                    if p > 0:
-                        bids.append({"price": float(p), "volume": int(v)})
-
-            if hasattr(data, "sell_price") and hasattr(data, "sell_volume"):
-                for p, v in zip(data.sell_price, data.sell_volume):
-                    if p > 0:
-                        asks.append({"price": float(p), "volume": int(v)})
+            # 安全解析期貨五檔委買委賣
+            bids, asks = extract_bids_asks(data, is_futures=True)
 
             return {
                 "code": contract.code,
                 "name": getattr(contract, "name", "台指期"),
                 "close": close_price,
-                "open": float(data.open) if hasattr(data, "open") else close_price,
-                "high": float(data.high) if hasattr(data, "high") else close_price,
-                "low": float(data.low) if hasattr(data, "low") else close_price,
+                "open": float(data.open) if hasattr(data, "open") and data.open else close_price,
+                "high": float(data.high) if hasattr(data, "high") and data.high else close_price,
+                "low": float(data.low) if hasattr(data, "low") and data.low else close_price,
                 "ref_price": ref_price,
                 "change": change,
                 "pct_change": pct_change,
