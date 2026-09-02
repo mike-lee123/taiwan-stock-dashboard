@@ -38,13 +38,18 @@ from charts import (
 from backtest import run_strategy_backtest
 from shioaji_client import ShioajiManager
 
-# 載入 Capital API Desktop Trading 資料夾模組
-capital_sub_dir = os.path.join(os.path.dirname(__file__), "Capital API Desktop Trading")
-if capital_sub_dir not in sys.path:
-    sys.path.insert(0, capital_sub_dir)
-
-from capital_client import CapitalManager
-from capital_trading_view import render_capital_trading_desk
+# 嘗試載入 Capital API 本機交易模組 (支援 Windows 本機與雲端環境無痛相容)
+try:
+    capital_sub_dir = os.path.join(os.path.dirname(__file__), "Capital API Desktop Trading")
+    if capital_sub_dir not in sys.path:
+        sys.path.insert(0, capital_sub_dir)
+    from capital_client import CapitalManager
+    from capital_trading_view import render_capital_trading_desk
+    HAS_CAPITAL = True
+except Exception:
+    HAS_CAPITAL = False
+    CapitalManager = None
+    render_capital_trading_desk = None
 from options import (
     black_scholes_pricing_and_greeks,
     get_weekly_txo_status,
@@ -118,7 +123,7 @@ st.markdown("""
 
 # 初始化券商 API 管理員
 sj_mgr = ShioajiManager.get_instance()
-cap_mgr = CapitalManager.get_instance()
+cap_mgr = CapitalManager.get_instance() if (HAS_CAPITAL and CapitalManager is not None) else None
 
 # 快取資料抓取函數
 @st.cache_data(ttl=300)
@@ -147,38 +152,39 @@ def get_cached_fundamentals(ticker: str):
 st.sidebar.title("📊 台股分析控制台")
 
 # 0. 群益金融 API (Capital API) 本機連線設定
-with st.sidebar.expander("💼 群益金融 API (Capital API) 本機設定", expanded=not cap_mgr.is_connected()):
-    cap_env_st = cap_mgr.get_env_status()
-    if cap_mgr.is_connected():
-        cap_env_label = "模擬沙盒" if cap_mgr.is_simulation() else "正式實盤"
-        st.markdown(f'<span style="background-color:#2ed573; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:bold;">🟢 群益已連線 ({cap_env_label})</span>', unsafe_allow_html=True)
-        st.caption(f"帳號: `{cap_mgr.get_user_id()}`")
-        if st.button("中斷群益連線", key="btn_logout_cap_main"):
-            cap_mgr.logout()
-            st.rerun()
-    else:
-        st.markdown(
-            '<span style="background-color:#747d8c; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:bold;">⚪ 群益未連線</span> '
-            '<span style="background-color:#1e90ff; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:bold;">🌐 Yahoo Finance 即時連線</span>',
-            unsafe_allow_html=True
-        )
-        st.caption("💡 提示：未連線實盤時，極速交易室自動以 Yahoo Finance 提供現貨、台指期與海期即時行情。")
-        in_cap_uid = st.text_input("身分證字號", value=os.getenv("CAPITAL_USER_ID", "A123456789"), key="in_cap_uid_main")
-        in_cap_pwd = st.text_input("登入密碼", value=os.getenv("CAPITAL_PASSWORD", "sim_pass"), type="password", key="in_cap_pwd_main")
-        in_cap_sim = st.checkbox("啟用模擬交易沙盒 (免憑證立即測試)", value=True, key="chk_cap_sim_main")
-        
-        if not cap_env_st["skcom_registered"]:
-            st.caption("ℹ️ 本機未註冊 SKCOM.dll，將以高擬真模擬沙盒運行。")
-            
-        if st.button("🚀 連線/啟動群益 API", key="btn_login_cap_main"):
-            u_val = in_cap_uid if in_cap_uid else "A123456789"
-            p_val = in_cap_pwd if in_cap_pwd else "sim_pass"
-            succ, msg = cap_mgr.login(user_id=u_val, password=p_val, simulation=in_cap_sim)
-            if succ:
-                st.success(msg)
+if cap_mgr is not None:
+    with st.sidebar.expander("💼 群益金融 API (Capital API) 本機設定", expanded=not cap_mgr.is_connected()):
+        cap_env_st = cap_mgr.get_env_status()
+        if cap_mgr.is_connected():
+            cap_env_label = "模擬沙盒" if cap_mgr.is_simulation() else "正式實盤"
+            st.markdown(f'<span style="background-color:#2ed573; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:bold;">🟢 群益已連線 ({cap_env_label})</span>', unsafe_allow_html=True)
+            st.caption(f"帳號: `{cap_mgr.get_user_id()}`")
+            if st.button("中斷群益連線", key="btn_logout_cap_main"):
+                cap_mgr.logout()
                 st.rerun()
-            else:
-                st.error(msg)
+        else:
+            st.markdown(
+                '<span style="background-color:#747d8c; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:bold;">⚪ 群益未連線</span> '
+                '<span style="background-color:#1e90ff; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:bold;">🌐 Yahoo Finance 即時連線</span>',
+                unsafe_allow_html=True
+            )
+            st.caption("💡 提示：未連線實盤時，極速交易室自動以 Yahoo Finance 提供現貨、台指期與海期即時行情。")
+            in_cap_uid = st.text_input("身分證字號", value=os.getenv("CAPITAL_USER_ID", "A123456789"), key="in_cap_uid_main")
+            in_cap_pwd = st.text_input("登入密碼", value=os.getenv("CAPITAL_PASSWORD", "sim_pass"), type="password", key="in_cap_pwd_main")
+            in_cap_sim = st.checkbox("啟用模擬交易沙盒 (免憑證立即測試)", value=True, key="chk_cap_sim_main")
+            
+            if not cap_env_st["skcom_registered"]:
+                st.caption("ℹ️ 本機未註冊 SKCOM.dll，將以高擬真模擬沙盒運行。")
+                
+            if st.button("🚀 連線/啟動群益 API", key="btn_login_cap_main"):
+                u_val = in_cap_uid if in_cap_uid else "A123456789"
+                p_val = in_cap_pwd if in_cap_pwd else "sim_pass"
+                succ, msg = cap_mgr.login(user_id=u_val, password=p_val, simulation=in_cap_sim)
+                if succ:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
 
 # 1. 永豐 Shioaji API 連線設定
 with st.sidebar.expander("🔑 永豐證券 Shioaji API 設定", expanded=not sj_mgr.is_connected()):
@@ -771,8 +777,16 @@ with tabs[0]:
 # ------------------------------------------------------------------------------
 with tabs[1]:
     st.markdown('<div class="sub-header-title">💼 群益金融 API (Capital API) 本機極速交易戰情室</div>', unsafe_allow_html=True)
-    latest_p_for_desk = float(raw_df["Close"].dropna().iloc[-1]) if not raw_df.empty else 100.0
-    render_capital_trading_desk(target_symbol=target_symbol, target_name=target_name, latest_price=latest_p_for_desk)
+    if HAS_CAPITAL and render_capital_trading_desk is not None:
+        latest_p_for_desk = float(raw_df["Close"].dropna().iloc[-1]) if not raw_df.empty else 100.0
+        render_capital_trading_desk(target_symbol=target_symbol, target_name=target_name, latest_price=latest_p_for_desk)
+    else:
+        st.info("""
+        💡 **群益金融 API (Capital API) 運行環境說明**：
+        * 群益 API（SKCOM）專為 **Windows 本機極速交易與海期下單** 設計，需於微軟 Windows 作業系統環境呼叫 COM 元件。
+        * 目前此網頁運行於 **雲端環境 (Streamlit Cloud Linux)**，因作業系統架構不包含 Windows COM 運行庫，本機交易室已自動切換為雲端守護模式。
+        * **若需使用群益極速下單功能**：請在您的本機 Windows 電腦上下載專案並執行 `run_capital_trading.bat`，即可體驗完整的群益極速下單戰情室！
+        """)
 
 
 # ------------------------------------------------------------------------------
