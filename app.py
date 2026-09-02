@@ -1575,7 +1575,16 @@ with tabs[5]:
                     pass
 
         if generate_financial_report:
-            st.markdown(generate_financial_report(target_symbol))
+            try:
+                st.markdown(generate_financial_report(target_symbol))
+            except Exception:
+                funds = get_cached_fundamentals(target_symbol)
+                st.markdown(f"""### 📑 {target_name} ({target_symbol}) 快速估值診斷
+- **本益比 (P/E)**：`{funds.get('pe_ratio', 'N/A')}` 倍
+- **股價淨值比 (P/B)**：`{funds.get('pb_ratio', 'N/A')}` 倍
+- **每股盈餘 (EPS)**：`NT${funds.get('eps', 'N/A')}`
+- **現金殖利率**：`{funds.get('dividend_yield', 'N/A')}%`
+- **股東權益報酬率 (ROE)**：`{funds.get('roe', 'N/A')}%`""")
         else:
             funds = get_cached_fundamentals(target_symbol)
             st.markdown(f"""### 📑 {target_name} ({target_symbol}) 快速估值診斷
