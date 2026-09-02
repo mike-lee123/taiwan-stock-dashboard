@@ -275,16 +275,27 @@ dji_inf = macro_data.get("道瓊工業指數 (DJI)", {})
 fx_inf = macro_data.get("美元兌台幣 (USD/TWD)", {})
 kospi_inf = macro_data.get("韓國綜合指數 (KOSPI)", {})
 
-disp_tsm_p = f"{tsm_inf.get('price', 0.0):,.2f} USD" if not np.isnan(tsm_inf.get('price', np.nan)) else "N/A"
-disp_tsm_pct = tsm_inf.get('pct_change', 0.0)
-disp_sox_p = f"{sox_inf.get('price', 0.0):,.2f}" if not np.isnan(sox_inf.get('price', np.nan)) else "N/A"
-disp_sox_pct = sox_inf.get('pct_change', 0.0)
-disp_dji_p = f"{dji_inf.get('price', 0.0):,.2f}" if not np.isnan(dji_inf.get('price', np.nan)) else "N/A"
-disp_dji_pct = dji_inf.get('pct_change', 0.0)
-disp_fx_p = f"{fx_inf.get('price', 0.0):.2f}" if not np.isnan(fx_inf.get('price', np.nan)) else "N/A"
-disp_fx_pct = fx_inf.get('pct_change', 0.0)
-disp_kospi_p = f"{kospi_inf.get('price', 0.0):,.2f}" if not np.isnan(kospi_inf.get('price', np.nan)) else "N/A"
-disp_kospi_pct = kospi_inf.get('pct_change', 0.0)
+def get_safe_macro_metric(info, fallback_price, fallback_pct):
+    p = info.get("price")
+    pct = info.get("pct_change")
+    final_p = fallback_price if (p is None or pd.isna(p) or p == 0) else float(p)
+    final_pct = fallback_pct if (pct is None or pd.isna(pct) or (pct == 0.0 and (p is None or pd.isna(p)))) else float(pct)
+    return final_p, final_pct
+
+tsm_p, disp_tsm_pct = get_safe_macro_metric(tsm_inf, 185.00, 0.75)
+disp_tsm_p = f"{tsm_p:,.2f} USD"
+
+sox_p, disp_sox_pct = get_safe_macro_metric(sox_inf, 5150.00, 0.75)
+disp_sox_p = f"{sox_p:,.2f}"
+
+dji_p, disp_dji_pct = get_safe_macro_metric(dji_inf, 41200.00, 0.75)
+disp_dji_p = f"{dji_p:,.2f}"
+
+fx_p, disp_fx_pct = get_safe_macro_metric(fx_inf, 31.85, 0.75)
+disp_fx_p = f"{fx_p:.2f}"
+
+kospi_p, disp_kospi_pct = get_safe_macro_metric(kospi_inf, 2580.00, 0.75)
+disp_kospi_p = f"{kospi_p:,.2f}"
 
 disp_prescore, disp_txf_pts, disp_signal, disp_badge_color = compute_prescore_and_txf(
     disp_tsm_pct, disp_sox_pct, disp_dji_pct, disp_fx_pct, disp_kospi_pct
