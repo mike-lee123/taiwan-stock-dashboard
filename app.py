@@ -528,8 +528,20 @@ with tabs[0]:
 
     # 5. 下單口數與資金部位試算 (Position Sizer)
     with opt_sub_tabs[4]:
-        st.subheader("💰 選擇權與台指期部位規模、下單口數與風控試算機")
-        st.markdown("透過標準機構級風險管理模型，依據您的**可用資金**與**單筆最大可承受風險比例**，精確推算建議安全下單口數與停損停利目標。")
+        st.subheader("💰 選擇權、指數期貨與個股期貨 (台積電/聯發科/大立光) 下單口數與風控試算機")
+        st.markdown("支援**台指選擇權、指數期貨 (大台/小台/微台)** 以及 **熱門個股期貨 (台積電、聯發科、大立光、鴻海等)**，依據您的可用資金與單筆最大風險上限，精確推算建議安全口數與停損停利。")
+
+        # 預設股價參考字典
+        STOCK_PRICE_REF = {
+            "台積電": 2420.0,
+            "聯發科": 3985.0,
+            "大立光": 7065.0,
+            "鴻海": 253.0,
+            "廣達": 332.5,
+            "長榮": 231.5,
+            "京元電": 118.5,
+            "世芯": 4065.0
+        }
 
         col_sz1, col_sz2, col_sz3 = st.columns(3)
         with col_sz1:
@@ -539,7 +551,19 @@ with tabs[0]:
                     "台指選擇權 (TXO) - 買方權利金 (NT$ 50 / 點)",
                     "微型台指期貨 (TMF) - 保證金 (NT$ 10 / 點)",
                     "小型台指期貨 (MXF) - 保證金 (NT$ 50 / 點)",
-                    "大型台指期貨 (TXF) - 保證金 (NT$ 200 / 點)"
+                    "大型台指期貨 (TXF) - 保證金 (NT$ 200 / 點)",
+                    "台積電期貨 (2330 / CDO) - 一口 2,000 股 (2張現股)",
+                    "小型台積電期貨 (2330 / QFF) - 一口 100 股 (零股型)",
+                    "聯發科期貨 (2454 / DHO) - 一口 2,000 股 (2張現股)",
+                    "小型聯發科期貨 (2454) - 一口 100 股 (零股型)",
+                    "大立光期貨 (3008 / CAO) - 一口 2,000 股 (2張現股)",
+                    "小型大立光期貨 (3008) - 一口 100 股 (零股型)",
+                    "鴻海期貨 (2317 / DHF) - 一口 2,000 股 (2張現股)",
+                    "廣達期貨 (2382 / JNF) - 一口 2,000 股 (2張現股)",
+                    "長榮期貨 (2603 / CZF) - 一口 2,000 股 (2張現股)",
+                    "京元電子期貨 (2449) - 一口 2,000 股 (2張現股)",
+                    "世芯-KY期貨 (3661) - 一口 2,000 股 (2張現股)",
+                    "自訂其他個股期貨 - 一口 2,000 股"
                 ],
                 index=0
             )
@@ -547,27 +571,42 @@ with tabs[0]:
                 "可用總資金 / 保證金 (NTD)",
                 min_value=10000,
                 max_value=100000000,
-                value=100000,
-                step=10000
+                value=500000,
+                step=50000
             )
+
+        # 判定商品類型
+        is_option = "選擇權" in product_type
+        is_stock_fut = any(k in product_type for k in ["台積電", "聯發科", "大立光", "鴻海", "廣達", "長榮", "京元", "世芯", "個股期"])
+        is_mini_stock = "小型" in product_type
+
+        # 決定預設進場價格
+        if is_option:
+            def_price = 50.0
+        elif is_stock_fut:
+            def_price = 100.0
+            for name, p in STOCK_PRICE_REF.items():
+                if name in product_type:
+                    def_price = p
+                    break
+        else:
+            def_price = float(round(taiex_current, 0))
 
         with col_sz2:
             max_risk_pct = st.slider(
                 "2. 單筆最大風險容忍比例 (%)",
                 min_value=1.0,
                 max_value=20.0,
-                value=5.0,
+                value=3.0,
                 step=0.5,
-                help="建議每筆交易風險控制在總本金的 2% ~ 5% 以內，長線立於不敗之地。"
+                help="建議每筆交易虧損控制在總本金的 2% ~ 5% 以內，長線立於不敗之地。"
             )
-            is_option = "選擇權" in product_type
-            default_entry_val = 50.0 if is_option else float(round(taiex_current, 0))
             entry_pt = st.number_input(
-                "進場成交價 / 點數",
-                min_value=1.0,
+                "進場價格 / 點數 (NTD)",
+                min_value=0.1,
                 max_value=100000.0,
-                value=default_entry_val,
-                step=1.0
+                value=def_price,
+                step=1.0 if def_price >= 10 else 0.1
             )
 
         with col_sz3:
@@ -587,6 +626,26 @@ with tabs[0]:
                     target_pt = round(entry_pt * 3.0, 1)
                 else:
                     target_pt = st.number_input("自訂停利點數", min_value=entry_pt, max_value=100000.0, value=round(entry_pt * 2.0, 1))
+            elif is_stock_fut:
+                sl_mode = st.selectbox("3. 停損機制", ["跌幅 -3% 停損 (極短線)", "跌幅 -5% 停損 (標準波段)", "跌幅 -7% 停損", "自訂停損價格"], index=1)
+                if "-3%" in sl_mode:
+                    stop_pt = round(entry_pt * 0.97, 1)
+                elif "-5%" in sl_mode:
+                    stop_pt = round(entry_pt * 0.95, 1)
+                elif "-7%" in sl_mode:
+                    stop_pt = round(entry_pt * 0.93, 1)
+                else:
+                    stop_pt = st.number_input("自訂停損價格", min_value=0.1, max_value=entry_pt, value=round(entry_pt * 0.95, 1))
+
+                tp_mode = st.selectbox("4. 停利目標", ["波段目標 +10% (盈虧比 2:1)", "波段目標 +15% (盈虧比 3:1)", "波段目標 +20%", "自訂停利價格"], index=0)
+                if "+10%" in tp_mode:
+                    target_pt = round(entry_pt * 1.10, 1)
+                elif "+15%" in tp_mode:
+                    target_pt = round(entry_pt * 1.15, 1)
+                elif "+20%" in tp_mode:
+                    target_pt = round(entry_pt * 1.20, 1)
+                else:
+                    target_pt = st.number_input("自訂停利價格", min_value=entry_pt, max_value=500000.0, value=round(entry_pt * 1.10, 1))
             else:
                 sl_mode = st.selectbox("3. 期貨停損點數", ["停損 40 點", "停損 60 點", "停損 80 點", "自訂停損點數"], index=1)
                 sl_val = 60.0 if "60" in sl_mode else (40.0 if "40" in sl_mode else (80.0 if "80" in sl_mode else 50.0))
@@ -596,8 +655,19 @@ with tabs[0]:
                 tp_val = 120.0 if "120" in tp_mode else (180.0 if "180" in tp_mode else 100.0)
                 target_pt = round(entry_pt + tp_val, 0)
 
-        # 數值運算
-        point_multiplier = 50.0 if "TXO" in product_type or "MXF" in product_type else (10.0 if "TMF" in product_type else 200.0)
+        # 數值乘數與契約規格
+        if is_option:
+            point_multiplier = 50.0
+            margin_rate = 1.0  # 買方付全額權利金
+            cost_per_lot_twd = entry_pt * point_multiplier
+        elif is_stock_fut:
+            point_multiplier = 100.0 if is_mini_stock else 2000.0
+            margin_rate = 0.135  # 期交所標準個股期保證金成數 13.5% (約 7.4 倍槓桿)
+            cost_per_lot_twd = entry_pt * point_multiplier * margin_rate
+        else:
+            point_multiplier = 10.0 if "TMF" in product_type else (50.0 if "MXF" in product_type else 200.0)
+            cost_per_lot_twd = 13000.0 if "TMF" in product_type else (65000.0 if "MXF" in product_type else 260000.0)
+
         risk_dollar_max = total_account_fund * (max_risk_pct / 100.0)
         loss_per_lot_pts = abs(entry_pt - stop_pt)
         profit_per_lot_pts = abs(target_pt - entry_pt)
@@ -605,22 +675,10 @@ with tabs[0]:
         loss_per_lot_twd = loss_per_lot_pts * point_multiplier
         profit_per_lot_twd = profit_per_lot_pts * point_multiplier
 
-        # 選擇權買方成本 = 權利金 * 50
-        cost_per_lot_twd = entry_pt * point_multiplier if is_option else (
-            13000.0 if "TMF" in product_type else (65000.0 if "MXF" in product_type else 260000.0)
-        )
-
-        if is_option:
-            # 依風險計算建議口數
-            suggested_lots = int(risk_dollar_max // loss_per_lot_twd) if loss_per_lot_twd > 0 else 1
-            # 不能超過可用本金能買的最大口數
-            max_afford_lots = int(total_account_fund // cost_per_lot_twd) if cost_per_lot_twd > 0 else 1
-            final_lots = max(1, min(suggested_lots, max_afford_lots))
-        else:
-            # 期貨依停損點數控管口數
-            suggested_lots = int(risk_dollar_max // loss_per_lot_twd) if loss_per_lot_twd > 0 else 1
-            max_afford_lots = int(total_account_fund // cost_per_lot_twd) if cost_per_lot_twd > 0 else 1
-            final_lots = max(1, min(suggested_lots, max_afford_lots))
+        # 依風險與資金控管計算建議口數
+        suggested_lots = int(risk_dollar_max // loss_per_lot_twd) if loss_per_lot_twd > 0 else 1
+        max_afford_lots = int(total_account_fund // cost_per_lot_twd) if cost_per_lot_twd > 0 else 1
+        final_lots = max(1, min(suggested_lots, max_afford_lots))
 
         total_cost_invested = final_lots * cost_per_lot_twd
         total_loss_at_stop = final_lots * loss_per_lot_twd
@@ -632,7 +690,7 @@ with tabs[0]:
 
         res_c1, res_c2, res_c3, res_c4 = st.columns(4)
         with res_c1:
-            st.metric("🎯 建議下單口數", f"{final_lots} 口", f"每口點數: {entry_pt:.1f}")
+            st.metric("🎯 建議下單口數", f"{final_lots} 口", f"契約規模: {point_multiplier:,.0f} 股/點")
         with res_c2:
             st.metric("💵 應備總權利金 / 保證金", f"NT${total_cost_invested:,.0f}", f"佔總資金 {(total_cost_invested/total_account_fund)*100:.1f}%")
         with res_c3:
@@ -642,16 +700,25 @@ with tabs[0]:
 
         plan_df = pd.DataFrame([{
             "交易商品": product_type.split(" - ")[0],
-            "進場點位": f"{entry_pt:.1f} 點",
-            "停損點位": f"{stop_pt:.1f} 點 (虧 {loss_per_lot_pts:.1f} 點)",
-            "停利點位": f"{target_pt:.1f} 點 (賺 {profit_per_lot_pts:.1f} 點)",
+            "契約規格": f"{point_multiplier:,.0f} 股/點 (槓桿 ~7.4x)" if is_stock_fut else f"{point_multiplier:,.0f} 元/點",
+            "進場點位/價格": f"NT$ {entry_pt:,.1f}",
+            "停損出場點位": f"NT$ {stop_pt:,.1f} (-{loss_per_lot_pts:,.1f})",
+            "停利目標點位": f"NT$ {target_pt:,.1f} (+{profit_per_lot_pts:,.1f})",
             "建議口數": f"{final_lots} 口",
-            "投入資金": f"NT$ {total_cost_invested:,.0f}",
+            "應備資金/保證金": f"NT$ {total_cost_invested:,.0f}",
             "預估最大虧損": f"NT$ -{total_loss_at_stop:,.0f}",
             "預估達成獲利": f"NT$ +{total_profit_at_target:,.0f}",
             "盈虧報酬比 (R:R)": f"1 : {rr_ratio:.2f}"
         }])
         st.dataframe(plan_df, use_container_width=True, hide_index=True)
+
+        if is_stock_fut:
+            # 計算相較現股節省的交易稅 (現股千分之三 vs 期貨十萬分之二)
+            share_equivalent = final_lots * point_multiplier
+            tax_stock = (entry_pt * share_equivalent) * 0.003
+            tax_future = (entry_pt * share_equivalent) * 0.00002
+            tax_saved = max(0, tax_stock - tax_future)
+            st.success(f"💡 **個股期貨交易稅優勢**：交易相當於 `{share_equivalent/1000:.1f} 張現股` 規模，相較於直接買賣現股，本筆交易單趟**現省交易稅約 NT$ {tax_saved:,.0f} 元**（個股期貨稅率僅 0.002%，現股為 0.3%）！")
 
 
 # ------------------------------------------------------------------------------
