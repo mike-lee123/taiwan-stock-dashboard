@@ -16,6 +16,7 @@ from plotly.subplots import make_subplots
 # 引入自訂模組
 from data_loader import (
     POPULAR_TW_STOCKS,
+    THEMATIC_STOCK_GROUPS,
     MACRO_BENCHMARKS,
     normalize_symbol,
     fetch_stock_history,
@@ -36,6 +37,14 @@ from charts import (
 )
 from backtest import run_strategy_backtest
 from shioaji_client import ShioajiManager
+
+# 載入 Capital API Desktop Trading 資料夾模組
+capital_sub_dir = os.path.join(os.path.dirname(__file__), "Capital API Desktop Trading")
+if capital_sub_dir not in sys.path:
+    sys.path.insert(0, capital_sub_dir)
+
+from capital_client import CapitalManager
+from capital_trading_view import render_capital_trading_desk
 from options import (
     black_scholes_pricing_and_greeks,
     get_weekly_txo_status,
@@ -107,8 +116,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 初始化 Shioaji 管理員
+# 初始化券商 API 管理員
 sj_mgr = ShioajiManager.get_instance()
+cap_mgr = CapitalManager.get_instance()
 
 # 快取資料抓取函數
 @st.cache_data(ttl=300)
@@ -135,6 +145,40 @@ def get_cached_fundamentals(ticker: str):
 # 側邊欄控制面板 (Sidebar)
 # ==============================================================================
 st.sidebar.title("📊 台股分析控制台")
+
+# 0. 群益金融 API (Capital API) 本機連線設定
+with st.sidebar.expander("💼 群益金融 API (Capital API) 本機設定", expanded=not cap_mgr.is_connected()):
+    cap_env_st = cap_mgr.get_env_status()
+    if cap_mgr.is_connected():
+        cap_env_label = "模擬沙盒" if cap_mgr.is_simulation() else "正式實盤"
+        st.markdown(f'<span style="background-color:#2ed573; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:bold;">🟢 群益已連線 ({cap_env_label})</span>', unsafe_allow_html=True)
+        st.caption(f"帳號: `{cap_mgr.get_user_id()}`")
+        if st.button("中斷群益連線", key="btn_logout_cap_main"):
+            cap_mgr.logout()
+            st.rerun()
+    else:
+        st.markdown(
+            '<span style="background-color:#747d8c; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:bold;">⚪ 群益未連線</span> '
+            '<span style="background-color:#1e90ff; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:bold;">🌐 Yahoo Finance 即時連線</span>',
+            unsafe_allow_html=True
+        )
+        st.caption("💡 提示：未連線實盤時，極速交易室自動以 Yahoo Finance 提供現貨、台指期與海期即時行情。")
+        in_cap_uid = st.text_input("身分證字號", value=os.getenv("CAPITAL_USER_ID", "A123456789"), key="in_cap_uid_main")
+        in_cap_pwd = st.text_input("登入密碼", value=os.getenv("CAPITAL_PASSWORD", "sim_pass"), type="password", key="in_cap_pwd_main")
+        in_cap_sim = st.checkbox("啟用模擬交易沙盒 (免憑證立即測試)", value=True, key="chk_cap_sim_main")
+        
+        if not cap_env_st["skcom_registered"]:
+            st.caption("ℹ️ 本機未註冊 SKCOM.dll，將以高擬真模擬沙盒運行。")
+            
+        if st.button("🚀 連線/啟動群益 API", key="btn_login_cap_main"):
+            u_val = in_cap_uid if in_cap_uid else "A123456789"
+            p_val = in_cap_pwd if in_cap_pwd else "sim_pass"
+            succ, msg = cap_mgr.login(user_id=u_val, password=p_val, simulation=in_cap_sim)
+            if succ:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
 
 # 1. 永豐 Shioaji API 連線設定
 with st.sidebar.expander("🔑 永豐證券 Shioaji API 設定", expanded=not sj_mgr.is_connected()):
@@ -261,6 +305,7 @@ st.markdown("---")
 # ==============================================================================
 tabs = st.tabs([
     "🎯 選擇權策略與決策中心",
+    "💼 群益本機極速交易室",
     "⚡ 永豐即時五檔與台指期",
     "🦅 多維策略選股獵鷹",
     "🌐 國際與總經連動",
@@ -722,9 +767,18 @@ with tabs[0]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 1: ⚡ 永豐即時五檔與台指期行情 (Shioaji Live Quotes & Futures)
+# 分頁 1: 💼 群益本機極速交易室 (Capital Trading Desk)
 # ------------------------------------------------------------------------------
 with tabs[1]:
+    st.markdown('<div class="sub-header-title">💼 群益金融 API (Capital API) 本機極速交易戰情室</div>', unsafe_allow_html=True)
+    latest_p_for_desk = float(raw_df["Close"].dropna().iloc[-1]) if not raw_df.empty else 100.0
+    render_capital_trading_desk(target_symbol=target_symbol, target_name=target_name, latest_price=latest_p_for_desk)
+
+
+# ------------------------------------------------------------------------------
+# 分頁 2: ⚡ 永豐即時五檔與台指期行情 (Shioaji Live Quotes & Futures)
+# ------------------------------------------------------------------------------
+with tabs[2]:
 
 
     st.markdown('<div class="sub-header-title">⚡ 永豐金證券 Shioaji 即時盤口與台指期行情</div>', unsafe_allow_html=True)
@@ -799,13 +853,13 @@ with tabs[1]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 2: 🦅 多維策略選股獵鷹 (Stock Screener)
+# 分頁 3: 🦅 多維策略選股獵鷹 (Stock Screener)
 # ------------------------------------------------------------------------------
-with tabs[2]:
+with tabs[3]:
 
     st.markdown('<div class="sub-header-title">🦅 台股多維度策略選股獵鷹 (Quant Strategy Screener)</div>', unsafe_allow_html=True)
 
-    col_s1, col_s2, col_s3 = st.columns([0.35, 0.45, 0.20])
+    col_s1, col_s2, col_s3, col_s4 = st.columns([0.28, 0.32, 0.25, 0.15])
     with col_s1:
         screener_strat = st.selectbox(
             "1. 選擇選股掃描策略",
@@ -815,105 +869,73 @@ with tabs[2]:
                 "🚀 帶量突破月線發動股 (vol_breakout: 突破MA20 且 量比>1.3x)",
                 "⚡ KD 低檔黃金交叉 (kd_golden: K向上突破D 且 K<70)",
                 "🔥 爆量長紅攻擊股 (vol_surge: 成交量>2倍 且 大漲)",
-                "💰 高殖利率與價值精選 (high_dividend: 殖利率>4.5%)",
+                "💰 高殖利率與價值精選 (high_dividend: 殖利率>4.0%)",
                 "🌊 RSI 低檔超賣反彈 (rsi_oversold: RSI<35 低檔反彈)"
             ],
             index=0
         )
     with col_s2:
+        fleet_keys = list(THEMATIC_STOCK_GROUPS.keys())
+        universe_options = [
+            f"👑 全市場核心 260 檔旗艦股池 (全部 {len(POPULAR_TW_STOCKS)} 檔：涵蓋高息ETF/AI/軍工/半導體/中小型)",
+        ] + [
+            f"{fk} ({len(THEMATIC_STOCK_GROUPS[fk])} 檔)" for fk in fleet_keys
+        ] + [
+            "🎯 自訂股票代碼清單 (自行輸入任意台股代碼)"
+        ]
         universe_choice = st.selectbox(
-            "2. 選擇掃描標的池 (篩選標的來源)",
-            [
-                "⭐ 核心熱門權值股池 (32 檔：權值/高息ETF/AI龍頭)",
-                "🔥 科技與半導體龍頭 (17 檔：晶圓/IC設計/伺服器/散熱/測試)",
-                "💰 高殖利率與金融傳產 (15 檔：高息ETF/金控/航運/鋼塑)",
-                "🎯 自訂股票代碼清單 (自行輸入任意台股代碼)"
-            ],
+            "2. 選擇掃描標的池",
+            universe_options,
             index=0
         )
     with col_s3:
+        grade_filter = st.selectbox(
+            "3. 🎯 精準等級過濾 (依勝率分級)",
+            [
+                "🥇 S + A 級精銳 (強勢發動 >= 60分【推薦】)",
+                "🌟 僅顯示 S 級 (頂級共振 >= 75分)",
+                "🥈 S + A + B 級 (多頭蓄勢 >= 45分)",
+                "全部等級 (S / A / B / C 級全顯示)"
+            ],
+            index=0
+        )
+    with col_s4:
         st.write("")
         st.write("")
-        run_screener_btn = st.button("🔍 執行策略即時掃描", use_container_width=True)
+        run_screener_btn = st.button("🔍 執行精準掃描", use_container_width=True)
 
-    # 若選取自訂股票池，顯示輸入框
-    custom_symbols_input = ""
-    if "自訂" in universe_choice:
+    # 決定 active_universe
+    if "全市場" in universe_choice or "全系列" in universe_choice:
+        active_universe = POPULAR_TW_STOCKS
+    elif "自訂" in universe_choice:
         custom_symbols_input = st.text_input(
             "輸入欲掃描的台股代碼 (以逗號分隔)",
-            value="2330, 2454, 2449, 2317, 3008, 2603, 0050, 6669"
+            value="2330, 2454, 2449, 2317, 3008, 2603, 0050, 6669, 3017, 3450, 8033, 6781"
         )
-
-    # 標的池定義
-    TECH_POOL = [
-        {"code": "2330", "name": "台積電", "sector": "晶圓代工"},
-        {"code": "2454", "name": "聯發科", "sector": "IC設計"},
-        {"code": "2317", "name": "鴻海", "sector": "AI伺服器/組裝"},
-        {"code": "2382", "name": "廣達", "sector": "AI伺服器"},
-        {"code": "2308", "name": "台達電", "sector": "電源/散熱"},
-        {"code": "3231", "name": "緯創", "sector": "AI伺服器"},
-        {"code": "2376", "name": "技嘉", "sector": "AI伺服器/主機板"},
-        {"code": "6669", "name": "緯穎", "sector": "雲端伺服器"},
-        {"code": "3443", "name": "創意", "sector": "ASIC/IP"},
-        {"code": "3661", "name": "世芯-KY", "sector": "ASIC/IP"},
-        {"code": "3008", "name": "大立光", "sector": "光學鏡頭"},
-        {"code": "3034", "name": "聯詠", "sector": "驅動IC"},
-        {"code": "2449", "name": "京元電子", "sector": "半導體測試"},
-        {"code": "2357", "name": "華碩", "sector": "PC/伺服器"},
-        {"code": "3711", "name": "日月光投控", "sector": "封測/CoWoS"},
-        {"code": "8069", "name": "元太", "sector": "電子紙/上櫃"},
-        {"code": "3293", "name": "鈊象", "sector": "遊戲軟體/上櫃"}
-    ]
-
-    DIVIDEND_POOL = [
-        {"code": "0056", "name": "元大高股息", "sector": "高股息ETF"},
-        {"code": "00878", "name": "國泰永續高股息", "sector": "高股息ETF"},
-        {"code": "00919", "name": "群益精選高息", "sector": "高股息ETF"},
-        {"code": "00929", "name": "復華科技優息", "sector": "科技高息ETF"},
-        {"code": "0050", "name": "元大台灣50", "sector": "市值型ETF"},
-        {"code": "006208", "name": "富邦台50", "sector": "市值型ETF"},
-        {"code": "2881", "name": "富邦金", "sector": "金控"},
-        {"code": "2882", "name": "國泰金", "sector": "金控"},
-        {"code": "2891", "name": "中信金", "sector": "金控"},
-        {"code": "2412", "name": "中華電", "sector": "電信"},
-        {"code": "2603", "name": "長榮", "sector": "貨櫃航運"},
-        {"code": "2609", "name": "陽明", "sector": "貨櫃航運"},
-        {"code": "2002", "name": "中鋼", "sector": "鋼鐵"},
-        {"code": "1301", "name": "台塑", "sector": "塑化"},
-        {"code": "1303", "name": "南亞", "sector": "塑化"}
-    ]
-
-    CORE_POOL = TECH_POOL + [
-        item for item in DIVIDEND_POOL if item["code"] not in [t["code"] for t in TECH_POOL]
-    ]
-
-    if "科技" in universe_choice:
-        active_universe = TECH_POOL
-    elif "高殖利率" in universe_choice:
-        active_universe = DIVIDEND_POOL
-    elif "自訂" in universe_choice and custom_symbols_input:
         tokens = [x.strip() for x in custom_symbols_input.split(",") if x.strip()]
         active_universe = []
         for tk in tokens:
             _, sym_name = normalize_symbol(tk)
             active_universe.append({"code": tk, "name": sym_name, "sector": "自選標的"})
     else:
-        active_universe = CORE_POOL
+        chosen_group_name = universe_choice.split(" (")[0].strip()
+        active_universe = THEMATIC_STOCK_GROUPS.get(chosen_group_name, POPULAR_TW_STOCKS)
 
     raw_key = screener_strat.split("(")[1].split(")")[0].split(":")[0].strip()
 
-    # 內建通用選股掃描函式
-    def execute_screening(strategy_key, universe_list):
-        results = []
-        for item in universe_list:
+    # 內建通用多核心平行選股掃描函式 (含等級排列與量化評分)
+    def execute_screening(strategy_key, universe_list, grade_setting):
+        import concurrent.futures
+
+        def scan_single_item(item):
             code = item["code"]
             name = item["name"]
-            sector = item["sector"]
+            sector = item.get("sector", "台股標的")
             norm_sym, norm_nm = normalize_symbol(code)
             try:
                 df = fetch_stock_history(norm_sym, period="3mo")
                 if df.empty or len(df) < 20:
-                    continue
+                    return None
                 df_ind = compute_all_indicators(df)
                 latest = df_ind.iloc[-1]
                 prev = df_ind.iloc[-2] if len(df_ind) > 1 else latest
@@ -928,69 +950,182 @@ with tabs[2]:
                 ma60 = float(latest.get("MA60", 0))
                 k_val = float(latest.get("K", 50))
                 d_val = float(latest.get("D", 50))
+                k_prev = float(prev.get("K", 50))
+                d_prev = float(prev.get("D", 50))
                 rsi6 = float(latest.get("RSI_6", 50))
+
+                # 多因子評分與標籤
+                score = 0
                 tags = []
-                if close > ma5 > ma20: tags.append("均線多頭")
-                if k_val > d_val and k_val < 70: tags.append("KD黃金交叉")
-                if vol_ratio >= 1.3 and pct > 1.0: tags.append("帶量突破")
-                if vol_ratio >= 2.0 and pct >= 2.5: tags.append("爆量長紅")
-                if rsi6 < 35: tags.append("RSI超賣反彈")
+
+                # 1. 均線與趨勢結構 (最高 30 分)
+                if close > ma5 > ma20 > ma60:
+                    score += 30
+                    tags.append("均線完美多頭")
+                elif close > ma5 > ma20:
+                    score += 20
+                    tags.append("短中期均線多頭")
+                elif close > ma20:
+                    score += 10
+                    tags.append("站上月線MA20")
+
+                # 2. 量價動能 (最高 30 分)
+                vol_score = 0
+                if vol_ratio >= 2.0 and pct >= 2.5:
+                    vol_score += 20
+                    tags.append("爆量長紅")
+                elif vol_ratio >= 1.3 and pct > 0.5:
+                    vol_score += 15
+                    tags.append("帶量突破")
+                elif vol_ratio >= 1.1:
+                    vol_score += 5
+
+                if pct >= 5.0:
+                    vol_score += 10
+                elif pct >= 2.0:
+                    vol_score += 7
+                elif pct > 0.0:
+                    vol_score += 4
+                score += min(30, vol_score)
+
+                # 3. 技術指標共振 KD & RSI (最高 25 分)
+                ind_score = 0
+                if k_val > d_val and k_prev <= d_prev and k_val < 75:
+                    ind_score += 15
+                    tags.append("KD黃金交叉")
+                elif k_val > d_val and k_val >= 75:
+                    ind_score += 10
+                    tags.append("KD高檔強勢鈍化")
+                elif k_val > d_val:
+                    ind_score += 8
+
+                if 55.0 <= rsi6 <= 80.0:
+                    ind_score += 10
+                    tags.append("RSI黃金攻擊區")
+                elif rsi6 < 35.0:
+                    ind_score += 8
+                    tags.append("RSI超賣築底")
+                score += min(25, ind_score)
+
+                # 4. 基本面與殖利率 (最高 15 分)
+                norm_div = 0.0
+                fund = fetch_stock_fundamentals(norm_sym)
+                dy = fund.get("dividend_yield")
+                if dy:
+                    norm_div = dy / 100.0 if dy > 50 else dy
+                    if norm_div >= 5.0:
+                        score += 15
+                        tags.append(f"高殖利率({norm_div:.1f}%)")
+                    elif norm_div >= 4.0:
+                        score += 10
+                        tags.append(f"穩健殖利率({norm_div:.1f}%)")
+                    elif norm_div >= 3.0:
+                        score += 5
+
+                # 等級評定
+                if score >= 75:
+                    grade = "🌟 S級 (頂級共振)"
+                    grade_code = "S"
+                    action_advice = "🔥 強勢主升段，沿5日線偏多積極佈局"
+                elif score >= 60:
+                    grade = "🥇 A級 (強勢攻擊)"
+                    grade_code = "A"
+                    action_advice = "🚀 帶量轉強發動，突破關鍵頸線順勢進場"
+                elif score >= 45:
+                    grade = "🥈 B級 (轉強蓄勢)"
+                    grade_code = "B"
+                    action_advice = "👀 整理打底初見轉強，逢低分批佈局"
+                else:
+                    grade = "🥉 C級 (潛伏觀察)"
+                    grade_code = "C"
+                    action_advice = "⚠️ 單一訊號符合，量能尚未放大，保守觀望"
+
+                # 策略符合性篩選
                 match = False
-                if strategy_key == "all_signals" and tags: match = True
-                elif strategy_key == "ma_bull" and "均線多頭" in tags: match = True
-                elif strategy_key == "vol_breakout" and "帶量突破" in tags: match = True
-                elif strategy_key == "kd_golden" and "KD黃金交叉" in tags: match = True
-                elif strategy_key == "vol_surge" and "爆量長紅" in tags: match = True
-                elif strategy_key == "rsi_oversold" and "RSI超賣反彈" in tags: match = True
-                elif strategy_key == "high_dividend":
-                    fund = fetch_stock_fundamentals(norm_sym)
-                    dy = fund.get("dividend_yield")
-                    if dy and dy >= 4.0:
-                        tags.append(f"高殖利率({dy:.1f}%)")
-                        match = True
+                if strategy_key == "all_signals" and len(tags) > 0:
+                    match = True
+                elif strategy_key == "ma_bull" and "均線" in str(tags):
+                    match = True
+                elif strategy_key == "vol_breakout" and "帶量突破" in tags:
+                    match = True
+                elif strategy_key == "kd_golden" and "KD" in str(tags):
+                    match = True
+                elif strategy_key == "vol_surge" and "爆量長紅" in tags:
+                    match = True
+                elif strategy_key == "rsi_oversold" and "超賣" in str(tags):
+                    match = True
+                elif strategy_key == "high_dividend" and norm_div >= 4.0:
+                    match = True
+
+                # 等級過濾
                 if match:
-                    results.append({
+                    if "僅顯示 S 級" in grade_setting and grade_code != "S":
+                        return None
+                    if "S + A 級" in grade_setting and grade_code not in ["S", "A"]:
+                        return None
+                    if "S + A + B 級" in grade_setting and grade_code not in ["S", "A", "B"]:
+                        return None
+
+                    return {
+                        "評級": grade,
+                        "綜合評分": f"{score} 分",
                         "股票代碼": code,
                         "股票名稱": name,
                         "所屬產業": sector,
                         "最新收盤價": f"NT${close:,.2f}",
                         "今日漲跌幅 (%)": f"{pct:+.2f}%",
-                        "今日成交量": f"{vol:,}",
                         "今日量比 (倍)": f"{vol_ratio:.2f}x",
+                        "今日成交量": f"{vol:,}",
                         "KD(9,3)": f"K:{k_val:.1f} D:{d_val:.1f}",
                         "RSI(6)": f"{rsi6:.1f}",
                         "觸發訊號標籤": " | ".join(tags) if tags else "多頭符合",
-                        "_close_raw": close,
-                        "_pct_raw": pct,
-                        "_ma5_raw": ma5,
-                        "_ma20_raw": ma20
-                    })
+                        "操盤建議": action_advice,
+                        "_score": score,
+                        "_pct": pct
+                    }
             except Exception:
-                continue
+                pass
+            return None
+
+        results = []
+        max_workers = min(12, len(universe_list)) if universe_list else 1
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(scan_single_item, it) for it in universe_list]
+            for f in concurrent.futures.as_completed(futures):
+                res = f.result()
+                if res:
+                    results.append(res)
+
         res_df = pd.DataFrame(results)
         if not res_df.empty:
-            res_df.sort_values(by="_pct_raw", ascending=False, inplace=True)
+            res_df.sort_values(by=["_score", "_pct"], ascending=[False, False], inplace=True)
         return res_df
 
     if run_screener_btn or "last_screener_results" not in st.session_state:
-        with st.spinner(f"正在掃描【{universe_choice.split(' (')[0]}】符合【{screener_strat.split(' (')[0]}】之標的..."):
-            screen_df = execute_screening(raw_key, active_universe)
+        target_name_clean = universe_choice.split(' (')[0]
+        strat_name_clean = screener_strat.split(' (')[0]
+        with st.spinner(f"正在平行多核心掃描【{target_name_clean}】符合【{strat_name_clean}】之標的 (共 {len(active_universe)} 檔)..."):
+            screen_df = execute_screening(raw_key, active_universe, grade_filter)
             st.session_state["last_screener_results"] = screen_df
             st.session_state["last_screener_strat"] = screener_strat
             st.session_state["last_screener_universe"] = universe_choice
+            st.session_state["last_screener_grade"] = grade_filter
 
     current_screen_df = st.session_state.get("last_screener_results", pd.DataFrame())
     current_strat_name = st.session_state.get("last_screener_strat", screener_strat)
     current_universe_name = st.session_state.get("last_screener_universe", universe_choice)
+    current_grade_filter = st.session_state.get("last_screener_grade", grade_filter)
 
     if not current_screen_df.empty:
         display_screen_df = current_screen_df.drop(columns=[c for c in current_screen_df.columns if c.startswith("_")])
-        m_col1, m_col2, m_col3 = st.columns(3)
+        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
         with m_col1:
             st.metric("策略命中檔數", f"{len(display_screen_df)} 檔")
         with m_col2:
             st.metric("篩選策略", current_strat_name.split(" (")[0])
         with m_col3:
+            st.metric("精準等級過濾", current_grade_filter.split(" (")[0])
+        with m_col4:
             st.metric("掃描標的池", current_universe_name.split(" (")[0])
 
         st.dataframe(display_screen_df, use_container_width=True, hide_index=True)
@@ -1145,9 +1280,9 @@ with tabs[2]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 3: 🌐 國際市場與總經連動 (Global & Macro)
+# 分頁 4: 🌐 國際市場與總經連動 (Global & Macro)
 # ------------------------------------------------------------------------------
-with tabs[3]:
+with tabs[4]:
 
     # 每日情報速遞生成區塊
     with st.expander("📰 點擊查看【今日台股盤前情報速報 / 盤後戰報】", expanded=True):
@@ -1245,9 +1380,9 @@ with tabs[3]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 4: 📈 個股技術分析 (Technical Analysis)
+# 分頁 5: 📈 個股技術分析 (Technical Analysis)
 # ------------------------------------------------------------------------------
-with tabs[4]:
+with tabs[5]:
 
     if df_with_ind.empty:
         st.error(f"無法載入 `{target_symbol}` ({target_name}) 的歷史交易資料，請檢查代碼是否正確。")
@@ -1321,9 +1456,9 @@ with tabs[4]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 5: 🏢 基本面與估值河流圖 (Fundamentals & Valuation)
+# 分頁 6: 🏢 基本面與估值河流圖 (Fundamentals & Valuation)
 # ------------------------------------------------------------------------------
-with tabs[5]:
+with tabs[6]:
 
     # 財報診斷報告生成
     with st.expander(f"📑 點擊產出【{target_name} 完整財報體質診斷與多模型目標價估算報告】", expanded=False):
@@ -1418,9 +1553,9 @@ with tabs[5]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 6: 👥 籌碼與法人動態 (Institutional & Chips)
+# 分頁 7: 👥 籌碼與法人動態 (Institutional & Chips)
 # ------------------------------------------------------------------------------
-with tabs[6]:
+with tabs[7]:
 
     st.markdown(f'<div class="sub-header-title">👥 {target_name} ({target_symbol}) 籌碼面與成交結構分析</div>', unsafe_allow_html=True)
     
@@ -1462,9 +1597,9 @@ with tabs[6]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 7: ⚔️ 多股報酬比較 (Stock Comparison)
+# 分頁 8: ⚔️ 多股報酬比較 (Stock Comparison)
 # ------------------------------------------------------------------------------
-with tabs[7]:
+with tabs[8]:
 
     st.markdown('<div class="sub-header-title">⚔️ 台股多檔標的與國際指數累積報酬率對照</div>', unsafe_allow_html=True)
     
@@ -1505,9 +1640,9 @@ with tabs[7]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 8: 🧪 量化策略回測實驗室 (Strategy Backtesting)
+# 分頁 9: 🧪 量化策略回測實驗室 (Strategy Backtesting)
 # ------------------------------------------------------------------------------
-with tabs[8]:
+with tabs[9]:
 
     st.markdown(f'<div class="sub-header-title">🧪 {target_name} 量化交易策略回測實驗室</div>', unsafe_allow_html=True)
 
