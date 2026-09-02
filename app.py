@@ -37,19 +37,6 @@ from charts import (
 )
 from backtest import run_strategy_backtest
 from shioaji_client import ShioajiManager
-
-# 嘗試載入 Capital API 本機交易模組 (支援 Windows 本機與雲端環境無痛相容)
-try:
-    capital_sub_dir = os.path.join(os.path.dirname(__file__), "Capital API Desktop Trading")
-    if capital_sub_dir not in sys.path:
-        sys.path.insert(0, capital_sub_dir)
-    from capital_client import CapitalManager
-    from capital_trading_view import render_capital_trading_desk
-    HAS_CAPITAL = True
-except Exception:
-    HAS_CAPITAL = False
-    CapitalManager = None
-    render_capital_trading_desk = None
 from options import (
     black_scholes_pricing_and_greeks,
     get_weekly_txo_status,
@@ -123,7 +110,6 @@ st.markdown("""
 
 # 初始化券商 API 管理員
 sj_mgr = ShioajiManager.get_instance()
-cap_mgr = CapitalManager.get_instance() if (HAS_CAPITAL and CapitalManager is not None) else None
 
 # 快取資料抓取函數
 @st.cache_data(ttl=300)
@@ -150,41 +136,6 @@ def get_cached_fundamentals(ticker: str):
 # 側邊欄控制面板 (Sidebar)
 # ==============================================================================
 st.sidebar.title("📊 台股分析控制台")
-
-# 0. 群益金融 API (Capital API) 本機連線設定
-if cap_mgr is not None:
-    with st.sidebar.expander("💼 群益金融 API (Capital API) 本機設定", expanded=not cap_mgr.is_connected()):
-        cap_env_st = cap_mgr.get_env_status()
-        if cap_mgr.is_connected():
-            cap_env_label = "模擬沙盒" if cap_mgr.is_simulation() else "正式實盤"
-            st.markdown(f'<span style="background-color:#2ed573; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:bold;">🟢 群益已連線 ({cap_env_label})</span>', unsafe_allow_html=True)
-            st.caption(f"帳號: `{cap_mgr.get_user_id()}`")
-            if st.button("中斷群益連線", key="btn_logout_cap_main"):
-                cap_mgr.logout()
-                st.rerun()
-        else:
-            st.markdown(
-                '<span style="background-color:#747d8c; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:bold;">⚪ 群益未連線</span> '
-                '<span style="background-color:#1e90ff; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:bold;">🌐 Yahoo Finance 即時連線</span>',
-                unsafe_allow_html=True
-            )
-            st.caption("💡 提示：未連線實盤時，極速交易室自動以 Yahoo Finance 提供現貨、台指期與海期即時行情。")
-            in_cap_uid = st.text_input("身分證字號", value=os.getenv("CAPITAL_USER_ID", "A123456789"), key="in_cap_uid_main")
-            in_cap_pwd = st.text_input("登入密碼", value=os.getenv("CAPITAL_PASSWORD", "sim_pass"), type="password", key="in_cap_pwd_main")
-            in_cap_sim = st.checkbox("啟用模擬交易沙盒 (免憑證立即測試)", value=True, key="chk_cap_sim_main")
-            
-            if not cap_env_st["skcom_registered"]:
-                st.caption("ℹ️ 本機未註冊 SKCOM.dll，將以高擬真模擬沙盒運行。")
-                
-            if st.button("🚀 連線/啟動群益 API", key="btn_login_cap_main"):
-                u_val = in_cap_uid if in_cap_uid else "A123456789"
-                p_val = in_cap_pwd if in_cap_pwd else "sim_pass"
-                succ, msg = cap_mgr.login(user_id=u_val, password=p_val, simulation=in_cap_sim)
-                if succ:
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
 
 # 1. 永豐 Shioaji API 連線設定
 with st.sidebar.expander("🔑 永豐證券 Shioaji API 設定", expanded=not sj_mgr.is_connected()):
@@ -311,7 +262,6 @@ st.markdown("---")
 # ==============================================================================
 tabs = st.tabs([
     "🎯 選擇權策略與決策中心",
-    "💼 群益本機極速交易室",
     "⚡ 永豐即時五檔與台指期",
     "🦅 多維策略選股獵鷹",
     "🌐 國際與總經連動",
@@ -773,26 +723,9 @@ with tabs[0]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 1: 💼 群益本機極速交易室 (Capital Trading Desk)
+# 分頁 1: ⚡ 永豐即時五檔與台指期行情 (Shioaji Live Quotes & Futures)
 # ------------------------------------------------------------------------------
 with tabs[1]:
-    st.markdown('<div class="sub-header-title">💼 群益金融 API (Capital API) 本機極速交易戰情室</div>', unsafe_allow_html=True)
-    if HAS_CAPITAL and render_capital_trading_desk is not None:
-        latest_p_for_desk = float(raw_df["Close"].dropna().iloc[-1]) if not raw_df.empty else 100.0
-        render_capital_trading_desk(target_symbol=target_symbol, target_name=target_name, latest_price=latest_p_for_desk)
-    else:
-        st.info("""
-        💡 **群益金融 API (Capital API) 運行環境說明**：
-        * 群益 API（SKCOM）專為 **Windows 本機極速交易與海期下單** 設計，需於微軟 Windows 作業系統環境呼叫 COM 元件。
-        * 目前此網頁運行於 **雲端環境 (Streamlit Cloud Linux)**，因作業系統架構不包含 Windows COM 運行庫，本機交易室已自動切換為雲端守護模式。
-        * **若需使用群益極速下單功能**：請在您的本機 Windows 電腦上下載專案並執行 `run_capital_trading.bat`，即可體驗完整的群益極速下單戰情室！
-        """)
-
-
-# ------------------------------------------------------------------------------
-# 分頁 2: ⚡ 永豐即時五檔與台指期行情 (Shioaji Live Quotes & Futures)
-# ------------------------------------------------------------------------------
-with tabs[2]:
 
 
     st.markdown('<div class="sub-header-title">⚡ 永豐金證券 Shioaji 即時盤口與台指期行情</div>', unsafe_allow_html=True)
@@ -867,9 +800,9 @@ with tabs[2]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 3: 🦅 多維策略選股獵鷹 (Stock Screener)
+# 分頁 2: 🦅 多維策略選股獵鷹 (Stock Screener)
 # ------------------------------------------------------------------------------
-with tabs[3]:
+with tabs[2]:
 
     st.markdown('<div class="sub-header-title">🦅 台股多維度策略選股獵鷹 (Quant Strategy Screener)</div>', unsafe_allow_html=True)
 
@@ -1095,7 +1028,11 @@ with tabs[3]:
                         "觸發訊號標籤": " | ".join(tags) if tags else "多頭符合",
                         "操盤建議": action_advice,
                         "_score": score,
-                        "_pct": pct
+                        "_pct": pct,
+                        "_pct_raw": pct,
+                        "_close_raw": close,
+                        "_ma5_raw": ma5,
+                        "_ma20_raw": ma20
                     }
             except Exception:
                 pass
@@ -1146,17 +1083,23 @@ with tabs[3]:
 
         # 命中標的今日漲跌長條圖
         st.markdown('<div class="sub-header-title">📊 策略命中標的今日漲跌幅排行</div>', unsafe_allow_html=True)
-        fig_screen = px.bar(
-            current_screen_df,
-            x="股票名稱",
-            y="_pct_raw",
-            color="_pct_raw",
-            color_continuous_scale=["#20bf6b", "#747d8c", "#eb3b5a"] if tw_color_style else ["#eb3b5a", "#747d8c", "#20bf6b"],
-            text="今日漲跌幅 (%)",
-            title=f"【{current_strat_name.split(' (')[0]}】命中標的漲跌動能排行"
-        )
-        fig_screen.update_layout(height=380, margin=dict(l=20, r=20, t=40, b=20), xaxis_title="標的", yaxis_title="漲跌幅 (%)")
-        st.plotly_chart(fig_screen, use_container_width=True)
+        # 動態挑選數值型漲跌欄位 (_pct_raw 或 _pct)
+        y_val_col = "_pct_raw" if "_pct_raw" in current_screen_df.columns else ("_pct" if "_pct" in current_screen_df.columns else None)
+        if y_val_col and "股票名稱" in current_screen_df.columns:
+            try:
+                fig_screen = px.bar(
+                    current_screen_df,
+                    x="股票名稱",
+                    y=y_val_col,
+                    color=y_val_col,
+                    color_continuous_scale=["#20bf6b", "#747d8c", "#eb3b5a"] if tw_color_style else ["#eb3b5a", "#747d8c", "#20bf6b"],
+                    text="今日漲跌幅 (%)" if "今日漲跌幅 (%)" in current_screen_df.columns else None,
+                    title=f"【{current_strat_name.split(' (')[0]}】命中標的漲跌動能排行"
+                )
+                fig_screen.update_layout(height=380, margin=dict(l=20, r=20, t=40, b=20), xaxis_title="標的", yaxis_title="漲跌幅 (%)")
+                st.plotly_chart(fig_screen, use_container_width=True)
+            except Exception as e_chart:
+                st.caption(f"圖表繪製說明：{e_chart}")
 
         # ----------------------------------------------------------------------
         # 💰 交易計畫與進出場價位 / 購買張數試算機 (Stock Position Sizer)
@@ -1172,7 +1115,11 @@ with tabs[3]:
                 selected_candidate = st.selectbox("1. 選擇擬交易之標的", stock_candidates, index=0)
                 sel_code = selected_candidate.split(" ")[0]
                 sel_row = current_screen_df[current_screen_df["股票代碼"] == sel_code].iloc[0]
-                curr_price = float(sel_row["_close_raw"])
+                if "_close_raw" in sel_row and pd.notna(sel_row["_close_raw"]):
+                    curr_price = float(sel_row["_close_raw"])
+                else:
+                    raw_p = str(sel_row.get("最新收盤價", "100")).replace("NT$", "").replace(",", "").strip()
+                    curr_price = float(raw_p) if raw_p else 100.0
 
                 total_stock_capital = st.number_input(
                     "總投資可用資金 (NTD)",
@@ -1294,9 +1241,9 @@ with tabs[3]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 4: 🌐 國際市場與總經連動 (Global & Macro)
+# 分頁 3: 🌐 國際市場與總經連動 (Global & Macro)
 # ------------------------------------------------------------------------------
-with tabs[4]:
+with tabs[3]:
 
     # 每日情報速遞生成區塊
     with st.expander("📰 點擊查看【今日台股盤前情報速報 / 盤後戰報】", expanded=True):
@@ -1394,9 +1341,9 @@ with tabs[4]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 5: 📈 個股技術分析 (Technical Analysis)
+# 分頁 4: 📈 個股技術分析 (Technical Analysis)
 # ------------------------------------------------------------------------------
-with tabs[5]:
+with tabs[4]:
 
     if df_with_ind.empty:
         st.error(f"無法載入 `{target_symbol}` ({target_name}) 的歷史交易資料，請檢查代碼是否正確。")
@@ -1470,9 +1417,9 @@ with tabs[5]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 6: 🏢 基本面與估值河流圖 (Fundamentals & Valuation)
+# 分頁 5: 🏢 基本面與估值河流圖 (Fundamentals & Valuation)
 # ------------------------------------------------------------------------------
-with tabs[6]:
+with tabs[5]:
 
     # 財報診斷報告生成
     with st.expander(f"📑 點擊產出【{target_name} 完整財報體質診斷與多模型目標價估算報告】", expanded=False):
@@ -1567,9 +1514,9 @@ with tabs[6]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 7: 👥 籌碼與法人動態 (Institutional & Chips)
+# 分頁 6: 👥 籌碼與法人動態 (Institutional & Chips)
 # ------------------------------------------------------------------------------
-with tabs[7]:
+with tabs[6]:
 
     st.markdown(f'<div class="sub-header-title">👥 {target_name} ({target_symbol}) 籌碼面與成交結構分析</div>', unsafe_allow_html=True)
     
@@ -1611,9 +1558,9 @@ with tabs[7]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 8: ⚔️ 多股報酬比較 (Stock Comparison)
+# 分頁 7: ⚔️ 多股報酬比較 (Stock Comparison)
 # ------------------------------------------------------------------------------
-with tabs[8]:
+with tabs[7]:
 
     st.markdown('<div class="sub-header-title">⚔️ 台股多檔標的與國際指數累積報酬率對照</div>', unsafe_allow_html=True)
     
@@ -1654,9 +1601,9 @@ with tabs[8]:
 
 
 # ------------------------------------------------------------------------------
-# 分頁 9: 🧪 量化策略回測實驗室 (Strategy Backtesting)
+# 分頁 8: 🧪 量化策略回測實驗室 (Strategy Backtesting)
 # ------------------------------------------------------------------------------
-with tabs[9]:
+with tabs[8]:
 
     st.markdown(f'<div class="sub-header-title">🧪 {target_name} 量化交易策略回測實驗室</div>', unsafe_allow_html=True)
 
