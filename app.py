@@ -268,47 +268,27 @@ def compute_prescore_and_txf(tsm_p_pct, sox_p_pct, dji_p_pct, fx_p_pct, kospi_p_
         
     return calc_score, round(txf_est), sig_label, badge_bg
 
-# 模式選擇 (預設為使用者要求的標準 85 分旗艦數值，亦可切換為實盤連網)
-cockpit_mode = st.session_state.get("cockpit_calc_mode", "🎯 標準旗艦情境 (PreScore 85分 / +145點)")
+# 100% 取用真實外盤全球即時行情連線運算
+tsm_inf = macro_data.get("台積電 ADR (TSM)", {})
+sox_inf = macro_data.get("費城半導體 (SOX)", {})
+dji_inf = macro_data.get("道瓊工業指數 (DJI)", {})
+fx_inf = macro_data.get("美元兌台幣 (USD/TWD)", {})
+kospi_inf = macro_data.get("韓國綜合指數 (KOSPI)", {})
 
-# 判定數據來源
-if cockpit_mode == "🎯 標準旗艦情境 (PreScore 85分 / +145點)":
-    disp_tsm_p = "185.00 USD"
-    disp_tsm_pct = 0.75
-    disp_sox_p = "5,150.00"
-    disp_sox_pct = 0.75
-    disp_dji_p = "41,200.00"
-    disp_dji_pct = 0.75
-    disp_fx_p = "31.85"
-    disp_fx_pct = 0.75
-    disp_kospi_p = "2,580.00"
-    disp_kospi_pct = 0.75
-    disp_prescore = 85
-    disp_txf_pts = 145
-    disp_signal = "🔥 多方強勢發動"
-    disp_badge_color = "#eb3b5a"
-else:
-    # 自 macro_data 取用即時實盤或快取
-    tsm_inf = macro_data.get("台積電 ADR (TSM)", {})
-    sox_inf = macro_data.get("費城半導體 (SOX)", {})
-    dji_inf = macro_data.get("道瓊工業指數 (DJI)", {})
-    fx_inf = macro_data.get("美元兌台幣 (USD/TWD)", {})
-    kospi_inf = macro_data.get("韓國綜合指數 (KOSPI)", {})
+disp_tsm_p = f"{tsm_inf.get('price', 0.0):,.2f} USD" if not np.isnan(tsm_inf.get('price', np.nan)) else "N/A"
+disp_tsm_pct = tsm_inf.get('pct_change', 0.0)
+disp_sox_p = f"{sox_inf.get('price', 0.0):,.2f}" if not np.isnan(sox_inf.get('price', np.nan)) else "N/A"
+disp_sox_pct = sox_inf.get('pct_change', 0.0)
+disp_dji_p = f"{dji_inf.get('price', 0.0):,.2f}" if not np.isnan(dji_inf.get('price', np.nan)) else "N/A"
+disp_dji_pct = dji_inf.get('pct_change', 0.0)
+disp_fx_p = f"{fx_inf.get('price', 0.0):.2f}" if not np.isnan(fx_inf.get('price', np.nan)) else "N/A"
+disp_fx_pct = fx_inf.get('pct_change', 0.0)
+disp_kospi_p = f"{kospi_inf.get('price', 0.0):,.2f}" if not np.isnan(kospi_inf.get('price', np.nan)) else "N/A"
+disp_kospi_pct = kospi_inf.get('pct_change', 0.0)
 
-    disp_tsm_p = f"{tsm_inf.get('price', 185.0):,.2f} USD"
-    disp_tsm_pct = tsm_inf.get('pct_change', 0.75)
-    disp_sox_p = f"{sox_inf.get('price', 5150.0):,.2f}"
-    disp_sox_pct = sox_inf.get('pct_change', 0.75)
-    disp_dji_p = f"{dji_inf.get('price', 41200.0):,.2f}"
-    disp_dji_pct = dji_inf.get('pct_change', 0.75)
-    disp_fx_p = f"{fx_inf.get('price', 31.85):.2f}"
-    disp_fx_pct = fx_inf.get('pct_change', 0.75)
-    disp_kospi_p = f"{kospi_inf.get('price', 2580.0):,.2f}"
-    disp_kospi_pct = kospi_inf.get('pct_change', 0.75)
-
-    disp_prescore, disp_txf_pts, disp_signal, disp_badge_color = compute_prescore_and_txf(
-        disp_tsm_pct, disp_sox_pct, disp_dji_pct, disp_fx_pct, disp_kospi_pct
-    )
+disp_prescore, disp_txf_pts, disp_signal, disp_badge_color = compute_prescore_and_txf(
+    disp_tsm_pct, disp_sox_pct, disp_dji_pct, disp_fx_pct, disp_kospi_pct
+)
 
 # 頂部指揮艙外觀容器
 st.markdown(f"""
@@ -367,27 +347,6 @@ with cockpit_c6:
         value=f"{txf_sign}{disp_txf_pts} 點",
         delta=disp_signal
     )
-
-# 模式切換與說明摺疊
-with st.expander("⚙️ 指揮艙情境切換與算力模型說明 (點擊展開)", expanded=False):
-    sel_mode = st.radio(
-        "選擇指揮艙運作情境",
-        [
-            "🎯 標準旗艦情境 (PreScore 85分 / +145點)",
-            "🌐 全球即時實盤動態連線 (自動抓取最新外盤動能即時換算)"
-        ],
-        index=0 if cockpit_mode == "🎯 標準旗艦情境 (PreScore 85分 / +145點)" else 1,
-        horizontal=True
-    )
-    if sel_mode != cockpit_mode:
-        st.session_state["cockpit_calc_mode"] = sel_mode
-        st.rerun()
-    st.caption("""
-    💡 **前瞻算力分 (PreScore) 與台指期夜盤推估模型原理**：
-    1. **權重架構**：以台積電 ADR (TSM, 權重 40%) 與費城半導體 (SOX, 權重 30%) 為核心，結合美股道瓊工業指數 (15%)、韓國 KOSPI (10%) 與台幣匯率波動 (5%)。
-    2. **台指夜盤與開盤點位變動**：模擬跨國關聯資產的隔夜漲跌推導台指期夜盤與隔日開盤衝擊點數。當外盤全面上漲 +0.75% 時，預估加權指數與台指期跳空開高約 **+145 點**。
-    3. **前瞻算力分 (PreScore)**：評分區間 0~100 分，**85 分代表多方動能高度共振（🔥 多方強勢發動）**，為波段偏多進場或台指期偏多策略的最佳攻擊訊號！
-    """)
 
 st.markdown("---")
 
@@ -1401,12 +1360,12 @@ with tabs[3]:
         """, unsafe_allow_html=True)
     with m_cockpit_c2:
         matrix_df = pd.DataFrame([
-            {"指標商品": "台積電 ADR (TSM)", "即時/基準報價": disp_tsm_p, "漲跌幅度": f"{disp_tsm_pct:+.2f}%", "模型權重": "40%", "台指期推估貢獻": f"{disp_tsm_pct*78:+.1f} 點", "市場定位": "台股護國神山/權值支柱"},
-            {"指標商品": "費城半導體 (SOX)", "即時/基準報價": disp_sox_p, "漲跌幅度": f"{disp_sox_pct:+.2f}%", "模型權重": "30%", "台指期推估貢獻": f"{disp_sox_pct*58:+.1f} 點", "市場定位": "全球AI與半導體先行風向球"},
-            {"指標商品": "道瓊工業指數 (DJI)", "即時/基準報價": disp_dji_p, "漲跌幅度": f"{disp_dji_pct:+.2f}%", "模型權重": "15%", "台指期推估貢獻": f"{disp_dji_pct*26:+.1f} 點", "市場定位": "美股傳統藍籌與總體景氣"},
-            {"指標商品": "韓國綜合指數 (KOSPI)", "即時/基準報價": disp_kospi_p, "漲跌幅度": f"{disp_kospi_pct:+.2f}%", "模型權重": "10%", "台指期推估貢獻": f"{disp_kospi_pct*32:+.1f} 點", "市場定位": "亞洲半導體/記憶體競合格局"},
-            {"指標商品": "美元兌台幣 (USD/TWD)", "即時/基準報價": disp_fx_p, "漲跌幅度": f"{disp_fx_pct:+.2f}%", "模型權重": "5%", "台指期推估貢獻": f"{-(disp_fx_pct*0):+.1f} 點", "市場定位": "外資資金匯出入與匯率防守線"},
-            {"指標商品": "🔥 台指期夜盤模擬合計", "即時/基準報價": "TXF 綜合估算", "漲跌幅度": f"PreScore {disp_prescore}分", "模型權重": "100%", "台指期推估貢獻": f"{'+' if disp_txf_pts > 0 else ''}{disp_txf_pts} 點", "市場定位": f"{disp_signal}"}
+            {"指標商品": "台積電 ADR (TSM)", "最新即時報價": disp_tsm_p, "漲跌幅度": f"{disp_tsm_pct:+.2f}%", "模型權重": "40%", "台指期推估貢獻": f"{disp_tsm_pct*78:+.1f} 點", "市場定位": "台股護國神山/權值支柱"},
+            {"指標商品": "費城半導體 (SOX)", "最新即時報價": disp_sox_p, "漲跌幅度": f"{disp_sox_pct:+.2f}%", "模型權重": "30%", "台指期推估貢獻": f"{disp_sox_pct*58:+.1f} 點", "市場定位": "全球AI與半導體先行風向球"},
+            {"指標商品": "道瓊工業指數 (DJI)", "最新即時報價": disp_dji_p, "漲跌幅度": f"{disp_dji_pct:+.2f}%", "模型權重": "15%", "台指期推估貢獻": f"{disp_dji_pct*26:+.1f} 點", "市場定位": "美股傳統藍籌與總體景氣"},
+            {"指標商品": "韓國綜合指數 (KOSPI)", "最新即時報價": disp_kospi_p, "漲跌幅度": f"{disp_kospi_pct:+.2f}%", "模型權重": "10%", "台指期推估貢獻": f"{disp_kospi_pct*32:+.1f} 點", "市場定位": "亞洲半導體/記憶體競合格局"},
+            {"指標商品": "美元兌台幣 (USD/TWD)", "最新即時報價": disp_fx_p, "漲跌幅度": f"{disp_fx_pct:+.2f}%", "模型權重": "5%", "台指期推估貢獻": f"{-(disp_fx_pct*0):+.1f} 點", "市場定位": "外資資金匯出入與匯率防守線"},
+            {"指標商品": "🔥 台指期夜盤模擬合計", "最新即時報價": "TXF 綜合估算", "漲跌幅度": f"PreScore {disp_prescore}分", "模型權重": "100%", "台指期推估貢獻": f"{'+' if disp_txf_pts > 0 else ''}{disp_txf_pts} 點", "市場定位": f"{disp_signal}"}
         ])
         st.dataframe(matrix_df, use_container_width=True, hide_index=True)
 
