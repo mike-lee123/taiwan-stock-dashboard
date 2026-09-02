@@ -4,37 +4,204 @@ Provides functions to fetch and normalize Taiwan stocks, global macro indices,
 ADR premium calculations, and fundamental financial metrics.
 """
 
+import os
+import json
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import datetime
 from typing import Dict, List, Tuple, Optional, Any
 
-# 熱門台股預設清單 (代碼, 名稱, 類別, 市場)
-POPULAR_TW_STOCKS = [
-    {"code": "2330", "name": "台積電", "sector": "半導體", "market": "TW"},
-    {"code": "2317", "name": "鴻海", "sector": "電子代工/AI伺服器", "market": "TW"},
-    {"code": "2454", "name": "聯發科", "sector": "IC設計", "market": "TW"},
-    {"code": "2382", "name": "廣達", "sector": "AI伺服器/電腦", "market": "TW"},
-    {"code": "2308", "name": "台達電", "sector": "電源/散熱/綠能", "market": "TW"},
-    {"code": "3231", "name": "緯創", "sector": "AI伺服器/電腦", "market": "TW"},
-    {"code": "2603", "name": "長榮", "sector": "航運", "market": "TW"},
-    {"code": "2881", "name": "富邦金", "sector": "金融保險", "market": "TW"},
-    {"code": "2882", "name": "國泰金", "sector": "金融保險", "market": "TW"},
-    {"code": "2412", "name": "中華電", "sector": "通信網路/電信", "market": "TW"},
-    {"code": "0050", "name": "元大台灣50", "sector": "市值型ETF", "market": "TW"},
-    {"code": "0056", "name": "元大高股息", "sector": "高股息ETF", "market": "TW"},
-    {"code": "00878", "name": "國泰永續高股息", "sector": "高股息ETF", "market": "TW"},
-    {"code": "00919", "name": "群益台灣精選高息", "sector": "高股息ETF", "market": "TW"},
-    {"code": "00929", "name": "復華台灣科技優息", "sector": "科技高息ETF", "market": "TW"},
-    {"code": "006208", "name": "富邦台50", "sector": "市值型ETF", "market": "TW"},
-    {"code": "3008", "name": "大立光", "sector": "光電/鏡頭", "market": "TW"},
-    {"code": "3443", "name": "創意", "sector": "ASIC/IP", "market": "TW"},
-    {"code": "3661", "name": "世芯-KY", "sector": "ASIC/IP", "market": "TW"},
-    {"code": "6547", "name": "高端疫苗", "sector": "生技醫療", "market": "TWO"},
-    {"code": "8069", "name": "元太", "sector": "電子紙/光電", "market": "TWO"},
-    {"code": "3293", "name": "鈊象", "sector": "遊戲軟體", "market": "TWO"}
-]
+# ==============================================================================
+# 台股 8 大核心題材熱門族群對照表 (主題選股與分類庫)
+# ==============================================================================
+THEMATIC_STOCK_GROUPS = {
+    "台積電供應鏈": [
+        {"code": "2330", "name": "台積電", "sector": "台積電供應鏈/晶圓代工", "market": "TW"},
+        {"code": "3131", "name": "弘塑", "sector": "台積電供應鏈/CoWoS濕製程", "market": "TWO"},
+        {"code": "3583", "name": "辛耘", "sector": "台積電供應鏈/CoWoS設備", "market": "TW"},
+        {"code": "3680", "name": "家登", "sector": "台積電供應鏈/EUV光罩盒", "market": "TWO"},
+        {"code": "6187", "name": "萬潤", "sector": "台積電供應鏈/CoWoS封裝", "market": "TWO"},
+        {"code": "1560", "name": "中砂", "sector": "台積電供應鏈/鑽石碟", "market": "TW"},
+        {"code": "2404", "name": "漢唐", "sector": "台積電供應鏈/無塵室工程", "market": "TW"},
+        {"code": "6667", "name": "信紘科", "sector": "台積電供應鏈/綠色廠務", "market": "TWO"},
+    ],
+    "散熱模組 (水冷)": [
+        {"code": "3017", "name": "奇鋐", "sector": "散熱模組/3D VC與水冷板", "market": "TW"},
+        {"code": "3324", "name": "雙鴻", "sector": "散熱模組/水冷板與CDU", "market": "TWO"},
+        {"code": "2421", "name": "建準", "sector": "散熱模組/AI伺服器風扇", "market": "TW"},
+        {"code": "8996", "name": "高力", "sector": "散熱模組/水冷歧管", "market": "TW"},
+        {"code": "3653", "name": "健策", "sector": "散熱模組/均熱片導線架", "market": "TW"},
+        {"code": "3483", "name": "力致", "sector": "散熱模組/風扇散熱", "market": "TWO"},
+    ],
+    "CPO 矽光子": [
+        {"code": "3450", "name": "聯鈞", "sector": "CPO矽光子/雷射光收發", "market": "TW"},
+        {"code": "6451", "name": "訊芯-KY", "sector": "CPO矽光子/光學先進封裝", "market": "TW"},
+        {"code": "3163", "name": "波若威", "sector": "CPO矽光子/光纖被動元件", "market": "TWO"},
+        {"code": "4977", "name": "眾達-KY", "sector": "CPO矽光子/800G光收發", "market": "TW"},
+        {"code": "3363", "name": "上詮", "sector": "CPO矽光子/光纖陣列", "market": "TWO"},
+        {"code": "4908", "name": "前鼎", "sector": "CPO矽光子/光收發模組", "market": "TWO"},
+        {"code": "4979", "name": "華星光", "sector": "CPO矽光子/光通訊主動", "market": "TWO"},
+    ],
+    "無人機概念": [
+        {"code": "2634", "name": "漢翔", "sector": "無人機/國防航太龍頭", "market": "TW"},
+        {"code": "8033", "name": "雷虎", "sector": "無人機/軍用商規國家隊", "market": "TW"},
+        {"code": "8222", "name": "寶一", "sector": "無人機/發動機零件", "market": "TW"},
+        {"code": "2645", "name": "長榮航太", "sector": "無人機/軍工組裝製造", "market": "TW"},
+        {"code": "5284", "name": "jpp-KY", "sector": "無人機/航太機構件", "market": "TW"},
+    ],
+    "低軌衛星": [
+        {"code": "3491", "name": "昇達科", "sector": "低軌衛星/毫米波高頻元件", "market": "TWO"},
+        {"code": "2313", "name": "華通", "sector": "低軌衛星/主板CCL衛星板", "market": "TW"},
+        {"code": "2314", "name": "台揚", "sector": "低軌衛星/地面接收天線", "market": "TW"},
+        {"code": "6285", "name": "啟碁", "sector": "低軌衛星/地面設備", "market": "TW"},
+        {"code": "5388", "name": "中磊", "sector": "低軌衛星/網通小型基站", "market": "TW"},
+    ],
+    "AI概念股": [
+        {"code": "2317", "name": "鴻海", "sector": "AI概念股/GB200機櫃總裝", "market": "TW"},
+        {"code": "2382", "name": "廣達", "sector": "AI概念股/伺服器代工", "market": "TW"},
+        {"code": "3231", "name": "緯創", "sector": "AI概念股/GPU基板UBB", "market": "TW"},
+        {"code": "6669", "name": "緯穎", "sector": "AI概念股/雲端AI伺服器", "market": "TW"},
+        {"code": "2376", "name": "技嘉", "sector": "AI概念股/伺服器主機板", "market": "TW"},
+        {"code": "2357", "name": "華碩", "sector": "AI概念股/工作站伺服器", "market": "TW"},
+        {"code": "2059", "name": "川湖", "sector": "AI概念股/伺服器重型滑軌", "market": "TW"},
+        {"code": "8210", "name": "勤誠", "sector": "AI概念股/AI專用機殼", "market": "TW"},
+        {"code": "2383", "name": "台光電", "sector": "AI概念股/高速CCL龍頭", "market": "TW"},
+        {"code": "2368", "name": "金像電", "sector": "AI概念股/高多層PCB", "market": "TW"},
+        {"code": "2345", "name": "智邦", "sector": "AI概念股/800G交換器", "market": "TW"},
+        {"code": "2308", "name": "台達電", "sector": "AI概念股/大功率電源", "market": "TW"},
+    ],
+    "半導體封測": [
+        {"code": "3711", "name": "日月光投控", "sector": "半導體封測/全球第一大", "market": "TW"},
+        {"code": "2449", "name": "京元電子", "sector": "半導體封測/GPU晶圓測試", "market": "TW"},
+        {"code": "6239", "name": "力成", "sector": "半導體封測/先進封裝", "market": "TW"},
+        {"code": "3264", "name": "欣銓", "sector": "半導體封測/晶圓測試", "market": "TWO"},
+        {"code": "8150", "name": "南茂", "sector": "半導體封測/記憶體驅動", "market": "TW"},
+        {"code": "6257", "name": "矽格", "sector": "半導體封測/IC封測", "market": "TW"},
+    ],
+    "高股息金控股": [
+        {"code": "2881", "name": "富邦金", "sector": "高股息金控/獲利王", "market": "TW"},
+        {"code": "2882", "name": "國泰金", "sector": "高股息金控/壽險金控", "market": "TW"},
+        {"code": "2891", "name": "中信金", "sector": "高股息金控/銀行獲利王", "market": "TW"},
+        {"code": "2886", "name": "兆豐金", "sector": "高股息金控/官股龍頭", "market": "TW"},
+        {"code": "2884", "name": "玉山金", "sector": "高股息金控/優質民營", "market": "TW"},
+        {"code": "2892", "name": "第一金", "sector": "高股息金控/官股高息", "market": "TW"},
+        {"code": "2880", "name": "華南金", "sector": "高股息金控/官股高息", "market": "TW"},
+        {"code": "5880", "name": "合庫金", "sector": "高股息金控/官股收益", "market": "TW"},
+    ],
+    "ETF與權值標竿": [
+        {"code": "0050", "name": "元大台灣50", "sector": "市值型ETF", "market": "TW"},
+        {"code": "0056", "name": "元大高股息", "sector": "高股息ETF", "market": "TW"},
+        {"code": "00878", "name": "國泰永續高股息", "sector": "高股息ETF", "market": "TW"},
+        {"code": "00919", "name": "群益精選高息", "sector": "高股息ETF", "market": "TW"},
+        {"code": "00929", "name": "復華科技優息", "sector": "科技高息ETF", "market": "TW"},
+        {"code": "006208", "name": "富邦台50", "sector": "市值型ETF", "market": "TW"},
+        {"code": "2603", "name": "長榮", "sector": "航運龍頭", "market": "TW"},
+        {"code": "2454", "name": "聯發科", "sector": "IC設計龍頭", "market": "TW"},
+        {"code": "3008", "name": "大立光", "sector": "光學鏡頭龍頭", "market": "TW"},
+        {"code": "3443", "name": "創意", "sector": "ASIC/IP", "market": "TW"},
+        {"code": "3661", "name": "世芯-KY", "sector": "ASIC/IP", "market": "TW"},
+        {"code": "8069", "name": "元太", "sector": "電子紙龍頭", "market": "TWO"},
+        {"code": "3293", "name": "鈊象", "sector": "遊戲股王", "market": "TWO"},
+    ]
+}
+
+# 優先載入客製化題材艦隊 (涵蓋使用者指定之7大精銳與散熱/台積電完整艦隊)
+for _tp in [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "thematic_fleets.json"),
+    r"C:\Users\mikelee\Desktop\Capital API Desktop Trading\thematic_fleets.json",
+    r"C:\Users\mikelee\.gemini\antigravity\brain\668d4d7a-4000-4593-9a8c-0157598b8997\scratch\thematic_fleets.json"
+]:
+    if os.path.exists(_tp):
+        try:
+            with open(_tp, "r", encoding="utf-8") as _f:
+                _loaded_fleets = json.load(_f)
+                if _loaded_fleets:
+                    THEMATIC_STOCK_GROUPS = _loaded_fleets
+            break
+        except Exception:
+            pass
+
+# ==============================================================================
+# 台股全市場 260 檔旗艦標的資料庫 (TAIWAN_STOCK_UNIVERSE_260)
+# ==============================================================================
+TAIWAN_STOCK_UNIVERSE_260 = {
+    "00403A": "特選大聯軍科技ETF", "0050": "元大台灣50", "0052": "富邦科技", "0055": "元大MSCI金融", "0056": "元大高股息",
+    "006208": "富邦台50", "00701": "國泰臺灣低波動", "00713": "元大台灣高息低波", "00733": "富邦臺灣中小", "00878": "國泰永續高股息",
+    "00915": "凱基台灣優選高股息", "00918": "大華優利高填息", "00919": "群益台灣精選高股息", "00921": "兆豐龍頭等權重", "00927": "群益半導體收益",
+    "00929": "復華科技優息", "00934": "中信成長高股息", "00939": "統一台灣高息動能", "00940": "元大臺灣價值高股息", "1101": "台泥",
+    "1102": "亞泥", "1216": "統一", "1301": "台塑", "1303": "南亞", "1319": "東陽", "1326": "台化", "1402": "遠東新",
+    "1476": "儒鴻", "1504": "東元", "1513": "中興電", "1560": "中砂", "1582": "信錦", "1590": "亞德客-KY", "1605": "華新",
+    "1717": "長興", "1795": "美時", "1802": "台玻", "2002": "中鋼", "2006": "東鋼", "2027": "大成鋼", "2059": "川湖",
+    "2105": "正新", "2206": "三陽工業", "2207": "和泰車", "2211": "長榮鋼", "2301": "光寶科", "2303": "聯電", "2308": "台達電",
+    "2312": "金寶", "2313": "華通", "2314": "台揚", "2317": "鴻海", "2324": "仁寶", "2327": "國巨", "2328": "廣宇",
+    "2330": "台積電", "2344": "華邦電", "2345": "智邦", "2354": "鴻準", "2355": "敬鵬", "2357": "華碩", "2360": "致茂",
+    "2367": "燿華", "2368": "金像電", "2376": "技嘉", "2377": "微星", "2379": "瑞昱", "2382": "廣達", "2383": "台光電",
+    "2385": "群光", "2390": "云辰", "2392": "正崴", "2395": "研華", "2402": "毅嘉", "2404": "漢唐", "2408": "南亞科",
+    "2409": "友達", "2412": "中華電", "2415": "錩新", "2417": "圓剛", "2419": "仲琦", "2421": "建準", "2428": "興勤",
+    "2449": "京元電子", "2451": "創見", "2454": "聯發科", "2455": "全新", "2457": "飛宏", "2458": "義隆", "2467": "志聖",
+    "2472": "立隆電", "2474": "可成", "2478": "大毅", "2481": "強茂", "2483": "百容", "2486": "一詮", "2492": "華新科",
+    "2603": "長榮", "2609": "陽明", "2610": "華航", "2615": "萬海", "2618": "長榮航", "2630": "亞航", "2634": "漢翔",
+    "2645": "長榮航太", "2880": "華南金", "2881": "富邦金", "2882": "國泰金", "2883": "凱基金", "2884": "玉山金", "2885": "元大金",
+    "2886": "兆豐金", "2887": "台新金", "2891": "中信金", "2892": "第一金", "2912": "統一超", "3003": "健和興", "3005": "神基",
+    "3008": "大立光", "3013": "晟銘電", "3014": "聯陽", "3015": "全漢", "3017": "奇鋐", "3019": "亞光", "3023": "信邦",
+    "3026": "禾伸堂", "3034": "聯詠", "3035": "智原", "3037": "欣興", "3042": "晶技", "3044": "健鼎", "3045": "台灣大",
+    "3081": "聯亞", "3090": "日電貿", "3105": "穩懋", "3131": "弘塑", "3138": "耀登", "3163": "波若威", "3189": "景碩",
+    "3211": "順達", "3221": "台嘉碩", "3227": "原相", "3228": "金麗科", "3231": "緯創", "3234": "光環", "3264": "欣銓",
+    "3265": "台星科", "3293": "鈊象", "3323": "加百裕", "3324": "雙鴻", "3363": "上詮", "3380": "明泰", "3406": "玉晶光",
+    "3416": "融程電", "3443": "創意", "3450": "聯鈞", "3483": "力致", "3491": "昇達科", "3533": "嘉澤", "3583": "辛耘",
+    "3587": "閎康", "3605": "宏致", "3653": "健策", "3661": "世芯-KY", "3665": "貿聯-KY", "3680": "家登", "3702": "大聯大",
+    "3704": "合勤控", "3711": "日月光投控", "4536": "拓凱", "4541": "晟田", "4572": "駐龍", "4749": "新應材", "4764": "雙鍵",
+    "4770": "上品", "4904": "遠傳", "4908": "前鼎", "4909": "新復興", "4919": "新唐", "4931": "新盛力", "4938": "和碩",
+    "4949": "有成精密", "4956": "光鋐", "4958": "臻鼎-KY", "4968": "立積", "4971": "IET-KY", "4977": "眾達-KY", "4979": "華星光",
+    "4991": "環宇-KY", "5222": "全訊", "5234": "達興材料", "5269": "祥碩", "5284": "jpp-KY", "5309": "系統電", "5347": "世界先進",
+    "5371": "中光電", "5388": "中磊", "5403": "中菲", "5475": "德宏", "5871": "中租-KY", "5880": "合庫金", "6139": "亞翔",
+    "6143": "振曜", "6146": "耕興", "6163": "華電網", "6176": "瑞儀", "6187": "萬潤", "6197": "佳必琪", "6213": "聯茂",
+    "6223": "旺矽", "6224": "聚鼎", "6239": "力成", "6257": "矽格", "6271": "同欣電", "6274": "台燿", "6282": "康舒",
+    "6285": "啟碁", "6409": "旭隼", "6412": "群電", "6442": "光聖", "6449": "鈺邦", "6451": "訊芯-KY", "6505": "台塑化",
+    "6510": "精測", "6515": "穎崴", "6530": "創威", "6547": "高端疫苗", "6588": "東典光電", "6618": "永虹先進", "6640": "均華",
+    "6667": "信紘科", "6669": "緯穎", "6672": "騰輝-KY", "6683": "雍智科技", "6706": "惠特", "6715": "嘉基", "6781": "AES-KY",
+    "6830": "汎銓", "6901": "鑽石生技", "6937": "天虹", "7402": "邑錡", "7717": "萊德光電-KY", "7719": "碳基", "7734": "印能科技",
+    "7768": "頌勝", "7769": "鴻勁", "8033": "雷虎", "8042": "金山電", "8046": "南電", "8048": "德勝", "8069": "元太",
+    "8086": "宏捷科", "8111": "立碁", "8112": "至上", "8150": "南茂", "8210": "勤誠", "8222": "寶一", "8261": "富鼎",
+    "8289": "泰藝", "8996": "高力", "9105": "泰金寶-DR"
+}
+
+# 櫃買中心 (OTC / TPEx) 代碼集合
+OTC_CODES_SET = {
+    "3081", "3105", "3131", "3138", "3163", "3211", "3221", "3227", "3228", "3234", "3264", "3265",
+    "3293", "3323", "3324", "3363", "3380", "3483", "3491", "3587", "3680", "4749", "4764", "4908",
+    "4909", "4971", "4979", "4991", "5222", "5234", "5284", "5309", "5347", "5371", "5403", "5475",
+    "6139", "6143", "6146", "6163", "6176", "6187", "6223", "6274", "6442", "6449", "6451", "6510",
+    "6515", "6530", "6547", "6588", "6640", "6667", "6672", "6683", "6706", "6715", "6781", "6830",
+    "6901", "6937", "7402", "7717", "7719", "7734", "7768", "7769", "8069", "8086", "8111", "8289"
+}
+
+# 動態扁平化生成 POPULAR_TW_STOCKS 清單 (去重複)
+_SEEN_CODES = set()
+POPULAR_TW_STOCKS = []
+for group_name, stock_list in THEMATIC_STOCK_GROUPS.items():
+    for item in stock_list:
+        if item["code"] not in _SEEN_CODES:
+            _SEEN_CODES.add(item["code"])
+            POPULAR_TW_STOCKS.append(item)
+
+# 完整整合 TAIWAN_STOCK_UNIVERSE_260 到 POPULAR_TW_STOCKS
+for code, name in TAIWAN_STOCK_UNIVERSE_260.items():
+    if code not in _SEEN_CODES:
+        _SEEN_CODES.add(code)
+        sec = "ETF/指數" if code.startswith("00") else (
+            "金融保險" if code.startswith("28") or code in ["5880", "5871"] else (
+                "航運物流" if code.startswith("26") else "核心權值與題材股"
+            )
+        )
+        is_otc = code in OTC_CODES_SET
+        POPULAR_TW_STOCKS.append({
+            "code": code,
+            "name": name,
+            "sector": sec,
+            "market": "TWO" if is_otc else "TW"
+        })
 
 # 國際與連動總經指標代碼對照表
 MACRO_BENCHMARKS = {
@@ -53,24 +220,38 @@ MACRO_BENCHMARKS = {
 def normalize_symbol(user_input: str) -> Tuple[str, str]:
     """
     將使用者輸入的股票代號或名稱解析為正確的 yfinance Ticker 與顯示名稱。
-    例如: '2330' -> ('2330.TW', '台積電')
-          '台積電' -> ('2330.TW', '台積電')
-          'TSM' -> ('TSM', '台積電 ADR')
-          'AAPL' -> ('AAPL', 'AAPL')
+    例如: '2330' -> ('2330.TW', '台積電 (2330)')
+          '8069' -> ('8069.TWO', '元太 (8069)')
+          '元大台灣50' -> ('0050.TW', '元大台灣50 (0050)')
     """
     cleaned = user_input.strip()
     if not cleaned:
         return "2330.TW", "台積電"
 
-    # 先在熱門清單中搜尋
+    cleaned_upper = cleaned.upper().replace(".TW", "").replace(".TWO", "")
+
+    # 1. 優先精準比對 TAIWAN_STOCK_UNIVERSE_260
+    if cleaned_upper in TAIWAN_STOCK_UNIVERSE_260:
+        c_name = TAIWAN_STOCK_UNIVERSE_260[cleaned_upper]
+        suffix = ".TWO" if cleaned_upper in OTC_CODES_SET else ".TW"
+        return f"{cleaned_upper}{suffix}", f"{c_name} ({cleaned_upper})"
+
+    # 2. 反向名稱比對
+    for c_code, c_name in TAIWAN_STOCK_UNIVERSE_260.items():
+        if cleaned == c_name:
+            suffix = ".TWO" if c_code in OTC_CODES_SET else ".TW"
+            return f"{c_code}{suffix}", f"{c_name} ({c_code})"
+
+    # 3. 在 POPULAR_TW_STOCKS 中搜尋
     for item in POPULAR_TW_STOCKS:
-        if cleaned.upper() == item["code"] or cleaned == item["name"]:
-            suffix = ".TWO" if item["market"] == "TWO" else ".TW"
+        if cleaned_upper == item["code"] or cleaned == item["name"]:
+            suffix = ".TWO" if item.get("market") == "TWO" else ".TW"
             return f"{item['code']}{suffix}", f"{item['name']} ({item['code']})"
 
-    # 檢查是否為純數字 (台股 4 或 5 或 6 位代碼)
+    # 4. 檢查是否為純數字 (台股 4 或 5 或 6 位代碼)
     if cleaned.isdigit():
-        return f"{cleaned}.TW", f"台股 {cleaned}"
+        suffix = ".TWO" if cleaned in OTC_CODES_SET else ".TW"
+        return f"{cleaned}{suffix}", f"台股 {cleaned}"
 
     # 若已經帶有 .TW 或 .TWO
     if cleaned.upper().endswith(".TW") or cleaned.upper().endswith(".TWO"):
@@ -94,6 +275,7 @@ def fetch_stock_history(
 ) -> pd.DataFrame:
     """
     抓取指定代碼的歷史 OHLCV 資料，並進行欄位標準化與清理。
+    支援 .TW 與 .TWO 雙向智能切換備援。
     """
     try:
         t = yf.Ticker(ticker)
@@ -102,14 +284,16 @@ def fetch_stock_history(
         else:
             df = t.history(period=period, interval=interval)
 
-        # 若 .TW 抓不到且是 4 碼數字，自動嘗試 .TWO (櫃買)
-        if (df.empty or len(df.dropna()) == 0) and ticker.endswith(".TW"):
-            alt_ticker = ticker.replace(".TW", ".TWO")
-            t_alt = yf.Ticker(alt_ticker)
-            if start and end:
-                df = t_alt.history(start=start, end=end, interval=interval)
-            else:
-                df = t_alt.history(period=period, interval=interval)
+        # 雙向智能備援：若抓不到資料，自動在 .TW 與 .TWO 之間互換嘗試
+        if df.empty or len(df.dropna()) == 0:
+            if ticker.endswith(".TW"):
+                alt_ticker = ticker.replace(".TW", ".TWO")
+                t_alt = yf.Ticker(alt_ticker)
+                df = t_alt.history(start=start, end=end, interval=interval) if (start and end) else t_alt.history(period=period, interval=interval)
+            elif ticker.endswith(".TWO"):
+                alt_ticker = ticker.replace(".TWO", ".TW")
+                t_alt = yf.Ticker(alt_ticker)
+                df = t_alt.history(start=start, end=end, interval=interval) if (start and end) else t_alt.history(period=period, interval=interval)
 
         if df.empty:
             return pd.DataFrame()
