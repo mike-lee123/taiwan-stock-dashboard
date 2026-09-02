@@ -305,12 +305,13 @@ with tabs[0]:
 
     st.markdown("---")
 
-    # 子分頁：四大核心功能
+    # 子分頁：五大核心功能
     opt_sub_tabs = st.tabs([
         "🧭 智能策略推薦與進出場判斷",
         "📈 策略到期損益模擬圖 (Payoff)",
         "🧮 Black-Scholes & Greeks 計算機",
-        "🪜 台指選擇權履約價鏈階梯表"
+        "🪜 台指選擇權履約價鏈階梯表",
+        "💰 下單口數與資金部位試算 (Position Sizer)"
     ])
 
     # 1. 智能策略推薦與進出場判斷
@@ -525,6 +526,133 @@ with tabs[0]:
         st.dataframe(ladder_df, use_container_width=True, hide_index=True)
         st.caption("註：以上報價為基於 Black-Scholes 模型與無風險利率 1.5% 推估之理論值，實際交易報價請以期交所盤面為準。")
 
+    # 5. 下單口數與資金部位試算 (Position Sizer)
+    with opt_sub_tabs[4]:
+        st.subheader("💰 選擇權與台指期部位規模、下單口數與風控試算機")
+        st.markdown("透過標準機構級風險管理模型，依據您的**可用資金**與**單筆最大可承受風險比例**，精確推算建議安全下單口數與停損停利目標。")
+
+        col_sz1, col_sz2, col_sz3 = st.columns(3)
+        with col_sz1:
+            product_type = st.selectbox(
+                "1. 交易商品類別",
+                [
+                    "台指選擇權 (TXO) - 買方權利金 (NT$ 50 / 點)",
+                    "微型台指期貨 (TMF) - 保證金 (NT$ 10 / 點)",
+                    "小型台指期貨 (MXF) - 保證金 (NT$ 50 / 點)",
+                    "大型台指期貨 (TXF) - 保證金 (NT$ 200 / 點)"
+                ],
+                index=0
+            )
+            total_account_fund = st.number_input(
+                "可用總資金 / 保證金 (NTD)",
+                min_value=10000,
+                max_value=100000000,
+                value=100000,
+                step=10000
+            )
+
+        with col_sz2:
+            max_risk_pct = st.slider(
+                "2. 單筆最大風險容忍比例 (%)",
+                min_value=1.0,
+                max_value=20.0,
+                value=5.0,
+                step=0.5,
+                help="建議每筆交易風險控制在總本金的 2% ~ 5% 以內，長線立於不敗之地。"
+            )
+            is_option = "選擇權" in product_type
+            default_entry_val = 50.0 if is_option else float(round(taiex_current, 0))
+            entry_pt = st.number_input(
+                "進場成交價 / 點數",
+                min_value=1.0,
+                max_value=100000.0,
+                value=default_entry_val,
+                step=1.0
+            )
+
+        with col_sz3:
+            if is_option:
+                sl_mode = st.selectbox("3. 停損機制", ["跌幅 -40% 嚴格停損", "跌幅 -50% 停損", "自訂停損點數"], index=0)
+                if "40%" in sl_mode:
+                    stop_pt = round(entry_pt * 0.6, 1)
+                elif "50%" in sl_mode:
+                    stop_pt = round(entry_pt * 0.5, 1)
+                else:
+                    stop_pt = st.number_input("自訂停損點數", min_value=0.0, max_value=entry_pt, value=round(entry_pt * 0.5, 1))
+
+                tp_mode = st.selectbox("4. 停利目標", ["翻倍停利 (+100%)", "三倍噴出 (+200%)", "自訂停利點數"], index=0)
+                if "100%" in tp_mode:
+                    target_pt = round(entry_pt * 2.0, 1)
+                elif "200%" in tp_mode:
+                    target_pt = round(entry_pt * 3.0, 1)
+                else:
+                    target_pt = st.number_input("自訂停利點數", min_value=entry_pt, max_value=100000.0, value=round(entry_pt * 2.0, 1))
+            else:
+                sl_mode = st.selectbox("3. 期貨停損點數", ["停損 40 點", "停損 60 點", "停損 80 點", "自訂停損點數"], index=1)
+                sl_val = 60.0 if "60" in sl_mode else (40.0 if "40" in sl_mode else (80.0 if "80" in sl_mode else 50.0))
+                stop_pt = round(entry_pt - sl_val, 0)
+
+                tp_mode = st.selectbox("4. 期貨停利目標", ["停利 120 點 (盈虧比 2:1)", "停利 180 點 (盈虧比 3:1)", "自訂停利點數"], index=0)
+                tp_val = 120.0 if "120" in tp_mode else (180.0 if "180" in tp_mode else 100.0)
+                target_pt = round(entry_pt + tp_val, 0)
+
+        # 數值運算
+        point_multiplier = 50.0 if "TXO" in product_type or "MXF" in product_type else (10.0 if "TMF" in product_type else 200.0)
+        risk_dollar_max = total_account_fund * (max_risk_pct / 100.0)
+        loss_per_lot_pts = abs(entry_pt - stop_pt)
+        profit_per_lot_pts = abs(target_pt - entry_pt)
+
+        loss_per_lot_twd = loss_per_lot_pts * point_multiplier
+        profit_per_lot_twd = profit_per_lot_pts * point_multiplier
+
+        # 選擇權買方成本 = 權利金 * 50
+        cost_per_lot_twd = entry_pt * point_multiplier if is_option else (
+            13000.0 if "TMF" in product_type else (65000.0 if "MXF" in product_type else 260000.0)
+        )
+
+        if is_option:
+            # 依風險計算建議口數
+            suggested_lots = int(risk_dollar_max // loss_per_lot_twd) if loss_per_lot_twd > 0 else 1
+            # 不能超過可用本金能買的最大口數
+            max_afford_lots = int(total_account_fund // cost_per_lot_twd) if cost_per_lot_twd > 0 else 1
+            final_lots = max(1, min(suggested_lots, max_afford_lots))
+        else:
+            # 期貨依停損點數控管口數
+            suggested_lots = int(risk_dollar_max // loss_per_lot_twd) if loss_per_lot_twd > 0 else 1
+            max_afford_lots = int(total_account_fund // cost_per_lot_twd) if cost_per_lot_twd > 0 else 1
+            final_lots = max(1, min(suggested_lots, max_afford_lots))
+
+        total_cost_invested = final_lots * cost_per_lot_twd
+        total_loss_at_stop = final_lots * loss_per_lot_twd
+        total_profit_at_target = final_lots * profit_per_lot_twd
+        rr_ratio = (profit_per_lot_pts / loss_per_lot_pts) if loss_per_lot_pts > 0 else 0.0
+
+        st.markdown("---")
+        st.markdown('<div class="sub-header-title">📊 試算結果與下單作戰計畫表</div>', unsafe_allow_html=True)
+
+        res_c1, res_c2, res_c3, res_c4 = st.columns(4)
+        with res_c1:
+            st.metric("🎯 建議下單口數", f"{final_lots} 口", f"每口點數: {entry_pt:.1f}")
+        with res_c2:
+            st.metric("💵 應備總權利金 / 保證金", f"NT${total_cost_invested:,.0f}", f"佔總資金 {(total_cost_invested/total_account_fund)*100:.1f}%")
+        with res_c3:
+            st.metric("🛑 觸發停損最大虧損", f"NT$ -{total_loss_at_stop:,.0f}", f"佔總資金 {(total_loss_at_stop/total_account_fund)*100:.1f}%", delta_color="inverse")
+        with res_c4:
+            st.metric("🚀 達成目標預期獲利", f"NT$ +{total_profit_at_target:,.0f}", f"報酬率 +{(total_profit_at_target/total_cost_invested)*100:.1f}%")
+
+        plan_df = pd.DataFrame([{
+            "交易商品": product_type.split(" - ")[0],
+            "進場點位": f"{entry_pt:.1f} 點",
+            "停損點位": f"{stop_pt:.1f} 點 (虧 {loss_per_lot_pts:.1f} 點)",
+            "停利點位": f"{target_pt:.1f} 點 (賺 {profit_per_lot_pts:.1f} 點)",
+            "建議口數": f"{final_lots} 口",
+            "投入資金": f"NT$ {total_cost_invested:,.0f}",
+            "預估最大虧損": f"NT$ -{total_loss_at_stop:,.0f}",
+            "預估達成獲利": f"NT$ +{total_profit_at_target:,.0f}",
+            "盈虧報酬比 (R:R)": f"1 : {rr_ratio:.2f}"
+        }])
+        st.dataframe(plan_df, use_container_width=True, hide_index=True)
+
 
 # ------------------------------------------------------------------------------
 # 分頁 1: ⚡ 永豐即時五檔與台指期行情 (Shioaji Live Quotes & Futures)
@@ -610,10 +738,10 @@ with tabs[2]:
 
     st.markdown('<div class="sub-header-title">🦅 台股多維度策略選股獵鷹 (Quant Strategy Screener)</div>', unsafe_allow_html=True)
 
-    col_s1, col_s2, col_s3 = st.columns([0.4, 0.3, 0.3])
+    col_s1, col_s2, col_s3 = st.columns([0.35, 0.45, 0.20])
     with col_s1:
         screener_strat = st.selectbox(
-            "選擇選股掃描策略",
+            "1. 選擇選股掃描策略",
             [
                 "🦅 多維度強勢訊號精選 (all_signals)",
                 "📈 均線多頭排列強勢股 (ma_bull: Close > MA5 > MA20 > MA60)",
@@ -626,73 +754,327 @@ with tabs[2]:
             index=0
         )
     with col_s2:
-        strat_key_map = {
-            "all_signals": "all_signals",
-            "ma_bull": "ma_bull",
-            "vol_breakout": "vol_breakout",
-            "kd_golden": "kd_golden",
-            "vol_surge": "vol_surge",
-            "high_dividend": "high_dividend",
-            "rsi_oversold": "rsi_oversold"
-        }
-        raw_key = screener_strat.split("(")[1].split(")")[0].split(":")[0].strip()
+        universe_choice = st.selectbox(
+            "2. 選擇掃描標的池 (篩選標的來源)",
+            [
+                "⭐ 核心熱門權值股池 (32 檔：權值/高息ETF/AI龍頭)",
+                "🔥 科技與半導體龍頭 (17 檔：晶圓/IC設計/伺服器/散熱/測試)",
+                "💰 高殖利率與金融傳產 (15 檔：高息ETF/金控/航運/鋼塑)",
+                "🎯 自訂股票代碼清單 (自行輸入任意台股代碼)"
+            ],
+            index=0
+        )
+    with col_s3:
+        st.write("")
+        st.write("")
         run_screener_btn = st.button("🔍 執行策略即時掃描", use_container_width=True)
 
-    # 載入選股模組
-    try:
-        from utils.screener import screen_stocks
-    except Exception:
-        try:
-            screener_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".agents/skills/taiwan-stock-screener/scripts"))
-            if screener_path not in sys.path:
-                sys.path.insert(0, screener_path)
-            from screener import screen_stocks
-        except Exception:
-            screen_stocks = None
+    # 若選取自訂股票池，顯示輸入框
+    custom_symbols_input = ""
+    if "自訂" in universe_choice:
+        custom_symbols_input = st.text_input(
+            "輸入欲掃描的台股代碼 (以逗號分隔)",
+            value="2330, 2454, 2449, 2317, 3008, 2603, 0050, 6669"
+        )
 
-    if screen_stocks:
-        if run_screener_btn or "last_screener_results" not in st.session_state:
-            with st.spinner(f"正在全市場掃描符合【{screener_strat.split(' (')[0]}】之標的..."):
-                screen_df = screen_stocks(strategy=raw_key)
-                st.session_state["last_screener_results"] = screen_df
-                st.session_state["last_screener_strat"] = screener_strat
+    # 標的池定義
+    TECH_POOL = [
+        {"code": "2330", "name": "台積電", "sector": "晶圓代工"},
+        {"code": "2454", "name": "聯發科", "sector": "IC設計"},
+        {"code": "2317", "name": "鴻海", "sector": "AI伺服器/組裝"},
+        {"code": "2382", "name": "廣達", "sector": "AI伺服器"},
+        {"code": "2308", "name": "台達電", "sector": "電源/散熱"},
+        {"code": "3231", "name": "緯創", "sector": "AI伺服器"},
+        {"code": "2376", "name": "技嘉", "sector": "AI伺服器/主機板"},
+        {"code": "6669", "name": "緯穎", "sector": "雲端伺服器"},
+        {"code": "3443", "name": "創意", "sector": "ASIC/IP"},
+        {"code": "3661", "name": "世芯-KY", "sector": "ASIC/IP"},
+        {"code": "3008", "name": "大立光", "sector": "光學鏡頭"},
+        {"code": "3034", "name": "聯詠", "sector": "驅動IC"},
+        {"code": "2449", "name": "京元電子", "sector": "半導體測試"},
+        {"code": "2357", "name": "華碩", "sector": "PC/伺服器"},
+        {"code": "3711", "name": "日月光投控", "sector": "封測/CoWoS"},
+        {"code": "8069", "name": "元太", "sector": "電子紙/上櫃"},
+        {"code": "3293", "name": "鈊象", "sector": "遊戲軟體/上櫃"}
+    ]
 
-        current_screen_df = st.session_state.get("last_screener_results", pd.DataFrame())
-        current_strat_name = st.session_state.get("last_screener_strat", screener_strat)
+    DIVIDEND_POOL = [
+        {"code": "0056", "name": "元大高股息", "sector": "高股息ETF"},
+        {"code": "00878", "name": "國泰永續高股息", "sector": "高股息ETF"},
+        {"code": "00919", "name": "群益精選高息", "sector": "高股息ETF"},
+        {"code": "00929", "name": "復華科技優息", "sector": "科技高息ETF"},
+        {"code": "0050", "name": "元大台灣50", "sector": "市值型ETF"},
+        {"code": "006208", "name": "富邦台50", "sector": "市值型ETF"},
+        {"code": "2881", "name": "富邦金", "sector": "金控"},
+        {"code": "2882", "name": "國泰金", "sector": "金控"},
+        {"code": "2891", "name": "中信金", "sector": "金控"},
+        {"code": "2412", "name": "中華電", "sector": "電信"},
+        {"code": "2603", "name": "長榮", "sector": "貨櫃航運"},
+        {"code": "2609", "name": "陽明", "sector": "貨櫃航運"},
+        {"code": "2002", "name": "中鋼", "sector": "鋼鐵"},
+        {"code": "1301", "name": "台塑", "sector": "塑化"},
+        {"code": "1303", "name": "南亞", "sector": "塑化"}
+    ]
 
-        if not current_screen_df.empty:
-            m_col1, m_col2, m_col3 = st.columns(3)
-            with m_col1:
-                st.metric("策略命中檔數", f"{len(current_screen_df)} 檔")
-            with m_col2:
-                st.metric("篩選策略", current_strat_name.split(" (")[0])
-            with m_col3:
-                st.metric("掃描範圍", "台灣 50 / 中型 100 / AI 與核心權值股")
+    CORE_POOL = TECH_POOL + [
+        item for item in DIVIDEND_POOL if item["code"] not in [t["code"] for t in TECH_POOL]
+    ]
 
-            st.dataframe(current_screen_df, use_container_width=True, hide_index=True)
-
-            # 命中標的今日漲跌長條圖
-            st.markdown('<div class="sub-header-title">📊 策略命中標的今日漲跌幅排行</div>', unsafe_allow_html=True)
-            # 解析漲跌幅為數值
-            plot_screen_df = current_screen_df.copy()
-            plot_screen_df["漲跌幅數值"] = plot_screen_df["今日漲跌幅 (%)"].str.replace("%", "").str.replace("+", "").astype(float)
-            plot_screen_df = plot_screen_df.sort_values(by="漲跌幅數值", ascending=False)
-            
-            fig_screen = px.bar(
-                plot_screen_df,
-                x="股票名稱",
-                y="漲跌幅數值",
-                color="漲跌幅數值",
-                color_continuous_scale=["#20bf6b", "#747d8c", "#eb3b5a"] if tw_color_style else ["#eb3b5a", "#747d8c", "#20bf6b"],
-                text="今日漲跌幅 (%)",
-                title=f"【{current_strat_name.split(' (')[0]}】命中標的漲跌動能排行"
-            )
-            fig_screen.update_layout(height=380, margin=dict(l=20, r=20, t=40, b=20), xaxis_title="標的", yaxis_title="漲跌幅 (%)")
-            st.plotly_chart(fig_screen, use_container_width=True)
-        else:
-            st.info("暫無符合該策略條件之標的，請嘗試更換不同選股策略。")
+    if "科技" in universe_choice:
+        active_universe = TECH_POOL
+    elif "高殖利率" in universe_choice:
+        active_universe = DIVIDEND_POOL
+    elif "自訂" in universe_choice and custom_symbols_input:
+        tokens = [x.strip() for x in custom_symbols_input.split(",") if x.strip()]
+        active_universe = []
+        for tk in tokens:
+            _, sym_name = normalize_symbol(tk)
+            active_universe.append({"code": tk, "name": sym_name, "sector": "自選標的"})
     else:
-        st.warning("選股獵鷹模組載入中...")
+        active_universe = CORE_POOL
+
+    raw_key = screener_strat.split("(")[1].split(")")[0].split(":")[0].strip()
+
+    # 內建通用選股掃描函式
+    def execute_screening(strategy_key, universe_list):
+        results = []
+        for item in universe_list:
+            code = item["code"]
+            name = item["name"]
+            sector = item["sector"]
+            norm_sym, norm_nm = normalize_symbol(code)
+            try:
+                df = fetch_stock_history(norm_sym, period="3mo")
+                if df.empty or len(df) < 20:
+                    continue
+                df_ind = compute_all_indicators(df)
+                latest = df_ind.iloc[-1]
+                prev = df_ind.iloc[-2] if len(df_ind) > 1 else latest
+                close = float(latest["Close"])
+                prev_close = float(prev["Close"])
+                pct = ((close - prev_close) / prev_close) * 100.0 if prev_close > 0 else 0.0
+                vol = int(latest["Volume"])
+                vol_ma5 = float(latest.get("Vol_MA5", vol))
+                vol_ratio = (vol / vol_ma5) if vol_ma5 > 0 else 1.0
+                ma5 = float(latest.get("MA5", 0))
+                ma20 = float(latest.get("MA20", 0))
+                ma60 = float(latest.get("MA60", 0))
+                k_val = float(latest.get("K", 50))
+                d_val = float(latest.get("D", 50))
+                rsi6 = float(latest.get("RSI_6", 50))
+                tags = []
+                if close > ma5 > ma20: tags.append("均線多頭")
+                if k_val > d_val and k_val < 70: tags.append("KD黃金交叉")
+                if vol_ratio >= 1.3 and pct > 1.0: tags.append("帶量突破")
+                if vol_ratio >= 2.0 and pct >= 2.5: tags.append("爆量長紅")
+                if rsi6 < 35: tags.append("RSI超賣反彈")
+                match = False
+                if strategy_key == "all_signals" and tags: match = True
+                elif strategy_key == "ma_bull" and "均線多頭" in tags: match = True
+                elif strategy_key == "vol_breakout" and "帶量突破" in tags: match = True
+                elif strategy_key == "kd_golden" and "KD黃金交叉" in tags: match = True
+                elif strategy_key == "vol_surge" and "爆量長紅" in tags: match = True
+                elif strategy_key == "rsi_oversold" and "RSI超賣反彈" in tags: match = True
+                elif strategy_key == "high_dividend":
+                    fund = fetch_stock_fundamentals(norm_sym)
+                    dy = fund.get("dividend_yield")
+                    if dy and dy >= 4.0:
+                        tags.append(f"高殖利率({dy:.1f}%)")
+                        match = True
+                if match:
+                    results.append({
+                        "股票代碼": code,
+                        "股票名稱": name,
+                        "所屬產業": sector,
+                        "最新收盤價": f"NT${close:,.2f}",
+                        "今日漲跌幅 (%)": f"{pct:+.2f}%",
+                        "今日成交量": f"{vol:,}",
+                        "今日量比 (倍)": f"{vol_ratio:.2f}x",
+                        "KD(9,3)": f"K:{k_val:.1f} D:{d_val:.1f}",
+                        "RSI(6)": f"{rsi6:.1f}",
+                        "觸發訊號標籤": " | ".join(tags) if tags else "多頭符合",
+                        "_close_raw": close,
+                        "_pct_raw": pct,
+                        "_ma5_raw": ma5,
+                        "_ma20_raw": ma20
+                    })
+            except Exception:
+                continue
+        res_df = pd.DataFrame(results)
+        if not res_df.empty:
+            res_df.sort_values(by="_pct_raw", ascending=False, inplace=True)
+        return res_df
+
+    if run_screener_btn or "last_screener_results" not in st.session_state:
+        with st.spinner(f"正在掃描【{universe_choice.split(' (')[0]}】符合【{screener_strat.split(' (')[0]}】之標的..."):
+            screen_df = execute_screening(raw_key, active_universe)
+            st.session_state["last_screener_results"] = screen_df
+            st.session_state["last_screener_strat"] = screener_strat
+            st.session_state["last_screener_universe"] = universe_choice
+
+    current_screen_df = st.session_state.get("last_screener_results", pd.DataFrame())
+    current_strat_name = st.session_state.get("last_screener_strat", screener_strat)
+    current_universe_name = st.session_state.get("last_screener_universe", universe_choice)
+
+    if not current_screen_df.empty:
+        display_screen_df = current_screen_df.drop(columns=[c for c in current_screen_df.columns if c.startswith("_")])
+        m_col1, m_col2, m_col3 = st.columns(3)
+        with m_col1:
+            st.metric("策略命中檔數", f"{len(display_screen_df)} 檔")
+        with m_col2:
+            st.metric("篩選策略", current_strat_name.split(" (")[0])
+        with m_col3:
+            st.metric("掃描標的池", current_universe_name.split(" (")[0])
+
+        st.dataframe(display_screen_df, use_container_width=True, hide_index=True)
+
+        # 命中標的今日漲跌長條圖
+        st.markdown('<div class="sub-header-title">📊 策略命中標的今日漲跌幅排行</div>', unsafe_allow_html=True)
+        fig_screen = px.bar(
+            current_screen_df,
+            x="股票名稱",
+            y="_pct_raw",
+            color="_pct_raw",
+            color_continuous_scale=["#20bf6b", "#747d8c", "#eb3b5a"] if tw_color_style else ["#eb3b5a", "#747d8c", "#20bf6b"],
+            text="今日漲跌幅 (%)",
+            title=f"【{current_strat_name.split(' (')[0]}】命中標的漲跌動能排行"
+        )
+        fig_screen.update_layout(height=380, margin=dict(l=20, r=20, t=40, b=20), xaxis_title="標的", yaxis_title="漲跌幅 (%)")
+        st.plotly_chart(fig_screen, use_container_width=True)
+
+        # ----------------------------------------------------------------------
+        # 💰 交易計畫與進出場價位 / 購買張數試算機 (Stock Position Sizer)
+        # ----------------------------------------------------------------------
+        st.markdown("---")
+        with st.expander("💰 股票交易進出場點位、投入資金與購買張數試算機 (Trade Execution & Position Sizer)", expanded=True):
+            st.markdown("針對篩選出的強勢標的，自動計算**建議進場價、停損價、停利價、建議買進張數與預期盈虧報酬比**，嚴格落實風控。")
+
+            stock_candidates = [f"{row['股票代碼']} {row['股票名稱']}" for _, row in current_screen_df.iterrows()]
+            calc_c1, calc_c2, calc_c3 = st.columns(3)
+            
+            with calc_c1:
+                selected_candidate = st.selectbox("1. 選擇擬交易之標的", stock_candidates, index=0)
+                sel_code = selected_candidate.split(" ")[0]
+                sel_row = current_screen_df[current_screen_df["股票代碼"] == sel_code].iloc[0]
+                curr_price = float(sel_row["_close_raw"])
+
+                total_stock_capital = st.number_input(
+                    "總投資可用資金 (NTD)",
+                    min_value=10000,
+                    max_value=100000000,
+                    value=1000000,
+                    step=50000
+                )
+
+            with calc_c2:
+                risk_tolerance_pct = st.slider(
+                    "2. 單筆交易最大風險容忍比例 (%)",
+                    min_value=0.5,
+                    max_value=10.0,
+                    value=2.0,
+                    step=0.5,
+                    help="每次虧損限制在總資金的 2%，確保即使連續多次停損依然保全元氣。"
+                )
+                entry_stock_price = st.number_input(
+                    "預定進場價位 (NTD)",
+                    min_value=1.0,
+                    max_value=20000.0,
+                    value=curr_price,
+                    step=1.0
+                )
+
+            with calc_c3:
+                sl_stock_mode = st.selectbox(
+                    "3. 停損價位設定方式",
+                    [
+                        "固定 -5% 停損 (短線動能)",
+                        "固定 -7% 停損 (波段防守)",
+                        "跌破 5 日均線 (MA5)",
+                        "跌破月線 (MA20)",
+                        "自訂停損價格"
+                    ],
+                    index=0
+                )
+                if "-5%" in sl_stock_mode:
+                    stock_sl_price = round(entry_stock_price * 0.95, 2)
+                elif "-7%" in sl_stock_mode:
+                    stock_sl_price = round(entry_stock_price * 0.93, 2)
+                elif "5 日均線" in sl_stock_mode:
+                    stock_sl_price = round(float(sel_row.get("_ma5_raw", entry_stock_price * 0.95)), 2)
+                elif "月線" in sl_stock_mode:
+                    stock_sl_price = round(float(sel_row.get("_ma20_raw", entry_stock_price * 0.92)), 2)
+                else:
+                    stock_sl_price = st.number_input("自訂停損價 (NTD)", min_value=1.0, max_value=entry_stock_price, value=round(entry_stock_price * 0.95, 2))
+
+                tp_stock_mode = st.selectbox(
+                    "4. 停利目標設定方式",
+                    [
+                        "盈虧比 2.0 : 1 (獲利為停損 2 倍)",
+                        "盈虧比 2.5 : 1 (推薦標準)",
+                        "盈虧比 3.0 : 1 (波段大賺)",
+                        "波段目標 +15%",
+                        "波段目標 +20%",
+                        "自訂停利價格"
+                    ],
+                    index=1
+                )
+                stock_loss_per_share = max(0.1, entry_stock_price - stock_sl_price)
+                if "2.0" in tp_stock_mode:
+                    stock_tp_price = round(entry_stock_price + stock_loss_per_share * 2.0, 2)
+                elif "2.5" in tp_stock_mode:
+                    stock_tp_price = round(entry_stock_price + stock_loss_per_share * 2.5, 2)
+                elif "3.0" in tp_stock_mode:
+                    stock_tp_price = round(entry_stock_price + stock_loss_per_share * 3.0, 2)
+                elif "+15%" in tp_stock_mode:
+                    stock_tp_price = round(entry_stock_price * 1.15, 2)
+                elif "+20%" in tp_stock_mode:
+                    stock_tp_price = round(entry_stock_price * 1.20, 2)
+                else:
+                    stock_tp_price = st.number_input("自訂停利價 (NTD)", min_value=entry_stock_price, max_value=50000.0, value=round(entry_stock_price * 1.15, 2))
+
+            # 股票部位運算
+            stock_profit_per_share = max(0.1, stock_tp_price - entry_stock_price)
+            max_risk_dollar = total_stock_capital * (risk_tolerance_pct / 100.0)
+
+            # 依風險計算建議股數
+            allowed_shares_by_risk = int(max_risk_dollar // stock_loss_per_share) if stock_loss_per_share > 0 else 100
+            # 不能超過資金上限
+            max_shares_by_capital = int(total_stock_capital // entry_stock_price) if entry_stock_price > 0 else 100
+            final_shares = max(1, min(allowed_shares_by_risk, max_shares_by_capital))
+
+            lots_full = final_shares // 1000
+            odd_shares = final_shares % 1000
+
+            capital_required = final_shares * entry_stock_price
+            total_loss_at_sl = final_shares * stock_loss_per_share
+            total_profit_at_tp = final_shares * stock_profit_per_share
+            stock_rr_ratio = (stock_profit_per_share / stock_loss_per_share) if stock_loss_per_share > 0 else 0.0
+
+            res_st1, res_st2, res_st3, res_st4 = st.columns(4)
+            with res_st1:
+                lots_display = f"{lots_full} 張" + (f" {odd_shares} 股" if odd_shares > 0 else "")
+                st.metric("🎯 建議買進數量", lots_display, f"共 {final_shares:,} 股")
+            with res_st2:
+                st.metric("💵 實際需備資金", f"NT${capital_required:,.0f}", f"佔總資金 {(capital_required/total_stock_capital)*100:.1f}%")
+            with res_st3:
+                st.metric("🛑 停損最大虧損", f"NT$ -{total_loss_at_sl:,.0f}", f"佔總資金 {(total_loss_at_sl/total_stock_capital)*100:.1f}%", delta_color="inverse")
+            with res_st4:
+                st.metric("🚀 達成停利預期獲利", f"NT$ +{total_profit_at_tp:,.0f}", f"預估報酬率 +{(total_profit_at_tp/capital_required)*100:.1f}%")
+
+            plan_st_df = pd.DataFrame([{
+                "擬買進標的": f"{sel_code} {sel_row['股票名稱']}",
+                "進場參考價": f"NT$ {entry_stock_price:,.2f}",
+                "停損出場價": f"NT$ {stock_sl_price:,.2f} (-{((entry_stock_price - stock_sl_price)/entry_stock_price)*100:.1f}%)",
+                "停利目標價": f"NT$ {stock_tp_price:,.2f} (+{((stock_tp_price - entry_stock_price)/entry_stock_price)*100:.1f}%)",
+                "建議購買數量": lots_display,
+                "投入本金": f"NT$ {capital_required:,.0f}",
+                "最大虧損金額": f"NT$ -{total_loss_at_sl:,.0f}",
+                "目標獲利金額": f"NT$ +{total_profit_at_tp:,.0f}",
+                "盈虧報酬比 (R:R)": f"1 : {stock_rr_ratio:.2f}"
+            }])
+            st.dataframe(plan_st_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("暫無符合該策略條件之標的，請嘗試切換標的池或更換不同選股策略。")
 
 
 # ------------------------------------------------------------------------------
@@ -705,24 +1087,38 @@ with tabs[3]:
         col_btn1, col_btn2 = st.columns([0.2, 0.8])
         report_mode = col_btn1.radio("情報模式", ["🌅 盤前速報", "🌆 盤後戰報"], index=0)
         
+        generate_pre_market_briefing = None
+        generate_post_market_briefing = None
         try:
-            from utils.daily_briefing import generate_pre_market_briefing, generate_post_market_briefing
+            from daily_briefing import generate_pre_market_briefing, generate_post_market_briefing
         except Exception:
             try:
-                from .agents.skills.taiwan_market_daily_briefing.scripts.daily_briefing import generate_pre_market_briefing, generate_post_market_briefing
+                from utils.daily_briefing import generate_pre_market_briefing, generate_post_market_briefing
             except Exception:
-                sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), ".agents/skills/taiwan-market-daily-briefing/scripts")))
                 try:
-                    from daily_briefing import generate_pre_market_briefing, generate_post_market_briefing
+                    from .agents.skills.taiwan_market_daily_briefing.scripts.daily_briefing import generate_pre_market_briefing, generate_post_market_briefing
                 except Exception:
-                    generate_pre_market_briefing = None
-                    generate_post_market_briefing = None
+                    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), ".agents/skills/taiwan-market-daily-briefing/scripts")))
+                    try:
+                        from daily_briefing import generate_pre_market_briefing, generate_post_market_briefing
+                    except Exception:
+                        pass
 
-        if generate_pre_market_briefing:
-            briefing_text = generate_pre_market_briefing() if "盤前" in report_mode else generate_post_market_briefing()
-            st.markdown(briefing_text)
-        else:
-            st.info("情報生成模組載入中...")
+        if not generate_pre_market_briefing:
+            def builtin_briefing():
+                sox_info = macro_data.get("費城半導體 (SOX)", {})
+                tsm_info = macro_data.get("台積電 ADR (TSM)", {})
+                fx_info = macro_data.get("美元兌台幣 (USD/TWD)", {})
+                return f"""### 🌅 台股早盤即時情報速報 (內建版)
+- **費城半導體**：`{sox_info.get('price', 0):,.2f}` ({sox_info.get('pct_change', 0):+.2f}%)
+- **台積電 ADR**：`${tsm_info.get('price', 0):,.2f}` ({tsm_info.get('pct_change', 0):+.2f}%)
+- **美元兌台幣**：`NT${fx_info.get('price', 0):.3f}` ({fx_info.get('pct_change', 0):+.2f}%)
+- **觀盤重點**：國際半導體與 ADR 走勢強勢連動，注意早盤開高震盪與 5 日線防守。"""
+            generate_pre_market_briefing = builtin_briefing
+            generate_post_market_briefing = builtin_briefing
+
+        briefing_text = generate_pre_market_briefing() if "盤前" in report_mode else generate_post_market_briefing()
+        st.markdown(briefing_text)
 
     st.markdown('<div class="sub-header-title">🎯 台積電 ADR (TSM) vs 現股 (2330) 溢價率分析</div>', unsafe_allow_html=True)
     
@@ -865,20 +1261,31 @@ with tabs[5]:
     # 財報診斷報告生成
     with st.expander(f"📑 點擊產出【{target_name} 完整財報體質診斷與多模型目標價估算報告】", expanded=False):
         fin_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".agents/skills/taiwan-financial-report-analyzer/scripts"))
-        if fin_path not in sys.path:
-            sys.path.insert(0, fin_path)
+        generate_financial_report = None
         try:
-            from utils.financial_analyzer import generate_financial_report
-            st.markdown(generate_financial_report(target_symbol))
+            from financial_analyzer import generate_financial_report
         except Exception:
             try:
-                fin_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".agents/skills/taiwan-financial-report-analyzer/scripts"))
-                if fin_path not in sys.path:
-                    sys.path.insert(0, fin_path)
-                from financial_analyzer import generate_financial_report
-                st.markdown(generate_financial_report(target_symbol))
-            except Exception as e_fin:
-                st.info(f"財報分析模組載入中: {e_fin}")
+                from utils.financial_analyzer import generate_financial_report
+            except Exception:
+                try:
+                    fin_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".agents/skills/taiwan-financial-report-analyzer/scripts"))
+                    if fin_path not in sys.path:
+                        sys.path.insert(0, fin_path)
+                    from financial_analyzer import generate_financial_report
+                except Exception:
+                    pass
+
+        if generate_financial_report:
+            st.markdown(generate_financial_report(target_symbol))
+        else:
+            funds = get_cached_fundamentals(target_symbol)
+            st.markdown(f"""### 📑 {target_name} ({target_symbol}) 快速估值診斷
+- **本益比 (P/E)**：`{funds.get('pe_ratio', 'N/A')}` 倍
+- **股價淨值比 (P/B)**：`{funds.get('pb_ratio', 'N/A')}` 倍
+- **每股盈餘 (EPS)**：`NT${funds.get('eps', 'N/A')}`
+- **現金殖利率**：`{funds.get('dividend_yield', 'N/A')}%`
+- **股東權益報酬率 (ROE)**：`{funds.get('roe', 'N/A')}%`""")
 
     st.markdown(f'<div class="sub-header-title">🏢 {target_name} ({target_symbol}) 財務體質與估值指標</div>', unsafe_allow_html=True)
     
