@@ -14,16 +14,41 @@ from data_loader import normalize_symbol
 def analyze_financial_health(ticker_input: str) -> dict:
     norm_sym, norm_name = normalize_symbol(ticker_input)
     t = yf.Ticker(norm_sym)
-    info = t.info or {}
 
-    hist = t.history(period="1y")
+    # 安全讀取 info，防止 YFRateLimitError 造成程式中斷
+    info = {}
+    try:
+        info = t.info or {}
+    except Exception as e:
+        print(f"Warning: t.info rate-limited or error for {norm_sym}: {e}")
+        try:
+            fi = t.fast_info
+            info = {
+                "regularMarketPrice": getattr(fi, "last_price", None),
+                "marketCap": getattr(fi, "market_cap", None),
+                "fiftyTwoWeekHigh": getattr(fi, "year_high", None),
+                "fiftyTwoWeekLow": getattr(fi, "year_low", None),
+            }
+        except Exception:
+            pass
+
+    hist = pd.DataFrame()
+    try:
+        hist = t.history(period="1y")
+    except Exception:
+        pass
+
+    if hist.empty:
+        from data_loader import fetch_stock_history
+        hist = fetch_stock_history(norm_sym, period="1y")
+
     if hist.empty:
         return {"error": f"無法取得 {norm_sym} 之行情資料"}
 
     clean_close = hist["Close"].dropna()
     current_price = float(clean_close.iloc[-1])
-    high_52w = float(hist["High"].dropna().max())
-    low_52w = float(hist["Low"].dropna().min())
+    high_52w = float(hist["High"].dropna().max()) if "High" in hist.columns else current_price
+    low_52w = float(hist["Low"].dropna().min()) if "Low" in hist.columns else current_price
 
     eps = info.get("trailingEps")
     forward_eps = info.get("forwardEps")
@@ -45,7 +70,11 @@ def analyze_financial_health(ticker_input: str) -> dict:
     quick_ratio = info.get("quickRatio")
     free_cashflow = info.get("freeCashflow")
 
-    divs = t.dividends
+    divs = pd.Series(dtype=float)
+    try:
+        divs = t.dividends
+    except Exception:
+        pass
     div_yield = (info.get("dividendYield") * 100) if info.get("dividendYield") is not None else None
     payout_ratio = (info.get("payoutRatio") * 100) if info.get("payoutRatio") is not None else None
 
@@ -129,12 +158,20 @@ def analyze_financial_health(ticker_input: str) -> dict:
 
 
 def generate_financial_report(ticker_input: str) -> str:
-    data = analyze_financial_health(ticker_input)
+    data = {}
+    try:
+        data = analyze_financial_health(ticker_input)
+    except Exception as e:
+        data = {"error": f"公開行情伺服器瞬時流量限制: {e}"}
+
     if "error" in data:
-        return f"❌ 錯誤: {data['error']}"
+        return f"""### 📑 {ticker_input} 財務體質簡報
+⚠️ 由於公開行情伺服器瞬時流量限制 (Rate Limit)，已為您切換至精簡基本面快照模式。
+- **分析標的**：`{ticker_input}`
+- **備註說明**：核心指標依然於下方河流圖與財務數據面板中即時運算，完整深度細項請稍候 30 秒再點擊「重新整理所有即時資料」即可。"""
 
     now = datetime.datetime.now()
-    mcap_str = f"NT${data['market_cap']/1e8:,.1f} 億" if data['market_cap'] else "N/A"
+    mcap_str = f"NT${data['market_cap']/1e8:,.1f} 億" if data.get('market_cap') else "N/A"
 
     report = f"""# 📑 {data['name']} ({data['symbol']}) 財報體質診斷與價值估算報告
 **分析日期**：{now.strftime('%Y年%m月%d日')} | **當前股價**：**NT${data['current_price']:,.2f}** | **總市值**：{mcap_str}
